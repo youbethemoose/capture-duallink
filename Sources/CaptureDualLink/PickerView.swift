@@ -65,9 +65,6 @@ struct PickerView: View {
             }
 
             HStack {
-                Button("Display Check") { model.openDisplayCheck() }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .help("Open a moving test grid to check sizing on the Mac and iPad")
                 Spacer()
                 Button(model.creating ? "Connecting…" : "Duplicate Window") {
                     Task { await model.duplicateSelected() }
@@ -138,7 +135,7 @@ struct PickerView: View {
                 }
                 .frame(height: 205)
             }
-            Text("Choose Live View, duplicate it, then drag the copy onto your iPad display.")
+            Text("Choose Live View, duplicate it, then drag the copy onto your iPad or another display.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -157,8 +154,6 @@ struct PickerView: View {
                     .buttonStyle(.borderedProminent).tint(.mint)
                 Button("Refresh") { Task { await model.refreshSources() } }
             }
-            Text("Use Display Check below to try the viewer and resolution controls first.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
         }
         .padding(22)
     }

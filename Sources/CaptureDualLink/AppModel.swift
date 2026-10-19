@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import ScreenCaptureKit
 import DualLinkCore
@@ -23,6 +24,8 @@ final class AppModel: ObservableObject {
     var onShowPicker: (() -> Void)?
     private(set) var sessions: [CGWindowID: CaptureSession] = [:]
     private(set) var mirrors: [UUID: MirrorWindowController] = [:]
+    private var trims: [CGWindowID: TrimModel] = [:]
+    private var trimObservers: [CGWindowID: AnyCancellable] = [:]
     private var engine: RenderEngine?
     private var pollTask: Task<Void, Never>?
     private var activityTask: Task<Void, Never>?
@@ -31,10 +34,6 @@ final class AppModel: ObservableObject {
     private var sleeping = false
     private var shuttingDown = false
     private var sequence = 0
-    private var displayCheckTimer: Timer?
-    private var displayCheckFrame: Int = 0
-    private var displayCheckBase: CIImage?
-    private let displayCheckID = CGWindowID.max
     private let activeContent: @MainActor () async throws -> SCShareableContent
     private let persistPreferences: Bool
 
@@ -65,7 +64,6 @@ final class AppModel: ObservableObject {
     func prepareForSleep() {
         guard !sleeping, !shuttingDown else { return }
         sleeping = true
-        displayCheckTimer?.invalidate(); displayCheckTimer = nil
         activityTask?.cancel(); activityTask = nil
         pollTask?.cancel(); pollTask = nil
         for mirror in mirrors.values { mirror.releaseLiveFrame() }
@@ -81,7 +79,6 @@ final class AppModel: ObservableObject {
     func resumeAfterSleep() {
         guard !shuttingDown else { return }
         sleeping = false
-        updateDisplayCheckActivity()
         recovery.removeAll()
         startPollingIfNeeded()
         scheduleActivityRefresh()
@@ -155,12 +152,18 @@ final class AppModel: ObservableObject {
             startPollingIfNeeded(); scheduleActivityRefresh()
             return
         }
-        if let previous = sessions.removeValue(forKey: source.id) { await previous.stop() }
-        let session = CaptureSession(source: source, detail: detail, fps: fps)
+        let trimModel = TrimModel(appName: source.app, trim: savedTrim(for: source.settingsKey))
+        trims[source.id] = trimModel
+        let session = CaptureSession(source: source, detail: detail, fps: fps, trim: trimModel.trim)
         sessions[source.id] = session
+        trimObservers[source.id] = trimModel.$trim.dropFirst().sink { [weak self, weak session] trim in
+            session?.trim = trim
+            self?.saveTrim(trim, for: source.settingsKey)
+        }
         let mirror = makeMirror(sourceID: source.id, title: source.label)
         session.onFrame = { [weak self, weak session] frame in
             guard let self, let session, self.sessions[source.id] === session else { return }
+            // Only a delivered frame proves recovery; a stream can start and die before one arrives.
             self.recovery[source.id]?.reset()
             for mirror in self.mirrors.values where mirror.sourceID == source.id { mirror.receive(frame) }
         }
@@ -170,8 +173,14 @@ final class AppModel: ObservableObject {
                 if session.failed { mirror.releaseLiveFrame() }
                 mirror.showStatus(message)
             }
-            if session.failed { self.scheduleActivityRefresh() }
         }
+        session.onFailure = { [weak self, weak session] in
+            guard let self, let session, self.sessions[source.id] === session else { return }
+            // Back off before reconnecting so a stream that keeps dying can't restart in a tight loop.
+            self.recovery[source.id, default: RecoveryBackoff()].failed(at: ProcessInfo.processInfo.systemUptime)
+            self.scheduleActivityRefresh()
+        }
+        session.onGeometryChange = { [weak self] in self?.scheduleActivityRefresh() }
         do {
             // Obtain a fresh SCWindow; the picker may have been open during a resize.
             let content = try await activeContent()
@@ -192,26 +201,33 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func savedTrim(for key: String) -> SourceTrim {
+        guard persistPreferences, let data = UserDefaults.standard.data(forKey: "trim." + key),
+              let trim = try? JSONDecoder().decode(SourceTrim.self, from: data) else { return .none }
+        return trim
+    }
+
+    private func saveTrim(_ trim: SourceTrim, for key: String) {
+        guard persistPreferences, let data = try? JSONEncoder().encode(trim) else { return }
+        UserDefaults.standard.set(data, forKey: "trim." + key)
+    }
+
     private func makeMirror(sourceID: CGWindowID, title: String) -> MirrorWindowController? {
-        guard let engine else { return nil }
+        guard let engine, let trimModel = trims[sourceID] else { return nil }
         sequence += 1
-        let mirror = MirrorWindowController(sourceID: sourceID, title: title, sequence: sequence, engine: engine)
+        let mirror = MirrorWindowController(sourceID: sourceID, title: title, sequence: sequence,
+                                            engine: engine, trimModel: trimModel)
         mirror.onRequestFrame = { [weak self] in self?.sessions[sourceID]?.latestFrame }
-        mirror.onActivityChange = { [weak self] in
-            self?.updateDisplayCheckActivity()
-            self?.scheduleActivityRefresh()
-        }
+        mirror.onActivityChange = { [weak self] in self?.scheduleActivityRefresh() }
         mirror.onClose = { [weak self] id in self?.removeMirror(id) }
         mirror.onDuplicate = { [weak self] in
-            guard let self else { return }
-            if sourceID == self.displayCheckID { self.openDisplayCheck(); return }
-            guard let session = self.sessions[sourceID] else { return }
+            guard let self, let session = self.sessions[sourceID] else { return }
             let extra = self.makeMirror(sourceID: sourceID, title: session.label)
             if let frame = session.latestFrame { extra?.receive(frame) }
         }
         mirrors[mirror.id] = mirror
         mirror.showWindow(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         updateCount()
         return mirror
     }
@@ -222,9 +238,8 @@ final class AppModel: ObservableObject {
         if !mirrors.values.contains(where: { $0.sourceID == sourceID }) {
             if let session = sessions.removeValue(forKey: sourceID) { Task { await session.stop() } }
             recovery.removeValue(forKey: sourceID)
-            if sourceID == displayCheckID {
-                displayCheckTimer?.invalidate(); displayCheckTimer = nil; displayCheckBase = nil
-            }
+            trims.removeValue(forKey: sourceID)
+            trimObservers.removeValue(forKey: sourceID)
         }
         if sessions.isEmpty { pollTask?.cancel(); pollTask = nil }
         updateCount()
@@ -245,7 +260,7 @@ final class AppModel: ObservableObject {
         guard pollTask == nil, !sessions.isEmpty, !sleeping, !shuttingDown else { return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                let delay = self?.pollingDelay ?? 2
+                let delay = self?.pollingDelay ?? 5
                 try? await Task.sleep(for: .seconds(delay))
                 guard !Task.isCancelled else { break }
                 await self?.refreshActiveSources()
@@ -253,8 +268,9 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Frames report resizes and density changes directly; the poll is a liveness backstop.
     private var pollingDelay: Double {
-        if sessions.contains(where: { $0.value.active && hasDemand(for: $0.key) }) { return 2 }
+        if sessions.contains(where: { $0.value.active && hasDemand(for: $0.key) }) { return 5 }
         let now = ProcessInfo.processInfo.systemUptime
         let waits = sessions.keys.filter { hasDemand(for: $0) }.map { max(0.5, (recovery[$0]?.nextAttempt ?? now) - now) }
         return min(15, waits.min() ?? 15)
@@ -275,12 +291,22 @@ final class AppModel: ObservableObject {
     }
 
     private var refreshingActive = false
+    private var refreshRequested = false
     private func refreshActiveSources() async {
-        guard !sessions.isEmpty, !refreshingActive, !sleeping, !shuttingDown else { return }
+        guard !sessions.isEmpty, !sleeping, !shuttingDown else { return }
+        // A request that arrives mid-refresh runs another pass instead of being dropped.
+        guard !refreshingActive else { refreshRequested = true; return }
         refreshingActive = true
         defer { refreshingActive = false }
+        repeat {
+            refreshRequested = false
+            await refreshActiveSourcesOnce()
+        } while refreshRequested && !sleeping && !shuttingDown
+    }
+
+    private func refreshActiveSourcesOnce() async {
         do {
-            // Stop capture altogether when every copy is frozen or offscreen.
+            // Stop capture altogether when every copy is offscreen or minimized.
             for (id, session) in Array(sessions) where !hasDemand(for: id) {
                 guard sessions[id] === session else { continue }
                 if session.active || session.failed { await session.stop() }
@@ -303,7 +329,6 @@ final class AppModel: ObservableObject {
                         else {
                             session.onStatus?("Reconnecting to the selected window…")
                             try await session.start(window: window)
-                            recovery[id]?.reset()
                         }
                     } else {
                         await session.stop()
@@ -322,74 +347,5 @@ final class AppModel: ObservableObject {
         } catch {
             message = "Window update failed: \(error.localizedDescription)"
         }
-    }
-
-    /// A moving pixel grid verifies sizing and aspect ratio without screen-recording access.
-    func openDisplayCheck() {
-        _ = makeMirror(sourceID: displayCheckID, title: "Display Check")
-        updateDisplayCheckActivity()
-    }
-
-    private func updateDisplayCheckActivity() {
-        guard !sleeping, !shuttingDown,
-              mirrors.values.contains(where: { $0.sourceID == displayCheckID && $0.wantsLiveFrames }) else {
-            displayCheckTimer?.invalidate(); displayCheckTimer = nil
-            return
-        }
-        guard displayCheckTimer == nil else { return }
-        renderDisplayCheck()
-        displayCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 15, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.renderDisplayCheck() }
-        }
-    }
-
-    private func renderDisplayCheck() {
-        guard !sleeping, mirrors.values.contains(where: { $0.sourceID == displayCheckID && $0.wantsLiveFrames }) else { return }
-        displayCheckFrame += 1
-        let size = CGSize(width: 1920, height: 1080)
-        if let base = displayCheckBase {
-            let bar = CIImage(color: CIColor(red: 0.1, green: 0.82, blue: 0.72))
-                .cropped(to: CGRect(x: 80 + displayCheckFrame % 1760, y: 190, width: 12, height: 70))
-            let frame = CapturedFrame(image: bar.composited(over: base), nativeSize: size)
-            for mirror in mirrors.values where mirror.sourceID == displayCheckID { mirror.receive(frame) }
-            return
-        }
-        let image = NSImage(size: size, flipped: false) { _ in
-            NSColor(calibratedWhite: 0.055, alpha: 1).setFill()
-            NSRect(origin: .zero, size: size).fill()
-            NSColor(calibratedWhite: 0.16, alpha: 1).setStroke()
-            let grid = NSBezierPath()
-            for x in stride(from: 0, through: 1920, by: 60) {
-                grid.move(to: NSPoint(x: x, y: 0)); grid.line(to: NSPoint(x: x, y: 1080))
-            }
-            for y in stride(from: 0, through: 1080, by: 60) {
-                grid.move(to: NSPoint(x: 0, y: y)); grid.line(to: NSPoint(x: 1920, y: y))
-            }
-            grid.stroke()
-            NSColor.systemMint.setStroke()
-            let circle = NSBezierPath(ovalIn: NSRect(x: 690, y: 270, width: 540, height: 540))
-            circle.lineWidth = 5; circle.stroke()
-            let heading: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 54, weight: .semibold), .foregroundColor: NSColor.white]
-            ("Capture DualLink" as NSString).draw(at: NSPoint(x: 80, y: 910), withAttributes: heading)
-            let note: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedSystemFont(ofSize: 26, weight: .regular), .foregroundColor: NSColor.lightGray]
-            ("1920 × 1080  •  The circle should stay round" as NSString).draw(at: NSPoint(x: 80, y: 845), withAttributes: note)
-            ("Drag this window to your iPad. Right-click for sizing and crop." as NSString).draw(at: NSPoint(x: 80, y: 90), withAttributes: note)
-            return true
-        }
-        // Rasterize at exactly 1920 × 1080; NSImage otherwise chooses the source
-        // display's Retina representation and makes this calibration label misleading.
-        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width),
-                                            pixelsHigh: Int(size.height), bitsPerSample: 8,
-                                            samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
-              let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return }
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = context
-        image.draw(in: NSRect(origin: .zero, size: size))
-        NSGraphicsContext.restoreGraphicsState()
-        guard let cg = bitmap.cgImage else { return }
-        displayCheckBase = CIImage(cgImage: cg)
-        let frame = CapturedFrame(image: displayCheckBase!, nativeSize: size)
-        for mirror in mirrors.values where mirror.sourceID == displayCheckID { mirror.receive(frame) }
     }
 }

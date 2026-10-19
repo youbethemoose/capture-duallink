@@ -4,17 +4,20 @@ import CoreImage
 import DualLinkCore
 import Darwin
 
-/// Developer integration check. It captures only this app's own calibration window.
-/// `currentProcess` is Apple's API for content that needs no screen-recording consent.
+/// Developer integration check. It captures only this app's own calibration window,
+/// drawn like Capture One's Live View: a busy toolbar, a flat gray background and a
+/// noisy 4:3 picture. `currentProcess` is Apple's API for content that needs no
+/// screen-recording consent.
 @MainActor
 final class CaptureProbe {
     let directory: URL
     private var source: NSWindow?
+    private var pattern: ProbePattern?
     private var session: CaptureSession?
     private var viewers: [MirrorWindowController] = []
+    private let trimModel = TrimModel(appName: "Calibration", trim: SourceTrim(top: Double(ProbePattern.toolbar)))
     private var checks: [String] = []
     private var failure: String?
-    private var phase = 0
     private var finished = false
     private var engine: RenderEngine?
     private var metadata: [String: String] = [:]
@@ -22,7 +25,13 @@ final class CaptureProbe {
     private var performance: [String: Any] = [:]
     private var verificationModel: AppModel?
     private var animationTimer: Timer?
-    private var waitingForVisibility = false
+    private var geometryReports = 0
+    private let readback = CGColorSpace(name: CGColorSpace.sRGB)!
+
+    private struct ProbeError: LocalizedError {
+        let errorDescription: String?
+        init(_ message: String) { errorDescription = message }
+    }
 
     init(directory: URL) { self.directory = directory }
 
@@ -30,171 +39,191 @@ final class CaptureProbe {
         guard #available(macOS 14.4, *) else { finish(error: "Self-test requires macOS 14.4."); return }
         guard let engine = RenderEngine() else { finish(error: "Metal unavailable"); return }
         self.engine = engine
-        let source = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 320, height: 240),
+        let source = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 640, height: 400),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         source.title = "DualLink Calibration Source"
         source.isReleasedWhenClosed = false
         source.isOpaque = false
         source.backgroundColor = .clear
         source.hasShadow = false
-        source.contentView = ProbePattern()
+        let pattern = ProbePattern()
+        source.contentView = pattern
         source.makeKeyAndOrderFront(nil)
-        self.source = source
+        self.source = source; self.pattern = pattern
         Task { [self] in
             do {
                 try await Task.sleep(for: .milliseconds(350))
-                let content = try await SCShareableContent.currentProcess
-                guard let window = content.windows.first(where: { $0.windowID == CGWindowID(source.windowNumber) }) else {
-                    finish(error: "Own calibration window was unavailable to ScreenCaptureKit."); return
-                }
-                let session = CaptureSession(source: WindowSource(window: window), detail: .native, fps: 30)
-                self.session = session
-                session.onMetadata = { [weak self] in self?.metadata = $0 }
-                session.onFrame = { [weak self] frame in self?.receive(frame) }
-                session.onStatus = { [weak self] status in
-                    if let status { self?.finish(error: status) }
-                }
-                for sequence in 1...2 {
-                    let viewer = MirrorWindowController(sourceID: window.windowID, title: "Calibration Copy",
-                                                        sequence: sequence, engine: engine)
-                    viewer.options.showInfo = false
-                    viewer.window?.level = .floating
-                    viewer.onRequestFrame = { [weak session] in session?.latestFrame }
-                    viewer.window?.setContentSize(NSSize(width: 640, height: 480))
-                    let area = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-                    viewer.window?.setFrameOrigin(NSPoint(x: area.minX + 20 + CGFloat(sequence - 1) * 670,
-                                                          y: area.minY + 60))
-                    viewer.showWindow(nil)
-                    viewers.append(viewer)
-                }
-                NSApp.activate(ignoringOtherApps: true)
-                try await session.start(window: window)
+                try await verifyCapture(engine: engine, source: source)
+                if CommandLine.arguments.contains("--check-performance"), failure == nil { await verifyPipeline() }
+                if CommandLine.arguments.contains("--check-fullscreen"), failure == nil {
+                    verifyFullscreen()
+                } else { finish(error: failure) }
             } catch { finish(error: error.localizedDescription) }
         }
         Task {
-            try? await Task.sleep(for: .seconds(CommandLine.arguments.contains("--check-performance") ? 75 : 20))
-            if !finished { finish(error: "Timed out waiting for captured calibration frames.") }
+            try? await Task.sleep(for: .seconds(CommandLine.arguments.contains("--check-performance") ? 90 : 30))
+            if !finished { finish(error: failure ?? "Timed out waiting for captured calibration frames.") }
         }
     }
 
-    private func receive(_ frame: CapturedFrame) {
-        guard !finished, let engine else { return }
-        for viewer in viewers { viewer.receive(frame) }
-        if phase == 0, viewers.contains(where: { $0.surface.frameImage == nil }) {
-            metadata["initialViewerVisibility"] = viewers.map {
-                "visible=\($0.window?.isVisible ?? false), occlusion=\($0.window?.occlusionState.rawValue ?? 0), wants=\($0.wantsLiveFrames)"
-            }.joined(separator: "; ")
-            if !waitingForVisibility {
-                waitingForVisibility = true
-                Task {
-                    try? await Task.sleep(for: .milliseconds(100))
-                    waitingForVisibility = false
-                    if phase == 0, let latest = session?.latestFrame { receive(latest) }
-                }
-            }
-            return
+    // MARK: Capture, trim, detection and grid through the real pipeline
+
+    private func verifyCapture(engine: RenderEngine, source: NSWindow) async throws {
+        guard #available(macOS 14.4, *) else { return }
+        let content = try await SCShareableContent.currentProcess
+        guard let window = content.windows.first(where: { $0.windowID == CGWindowID(source.windowNumber) }) else {
+            throw ProbeError("Own calibration window was unavailable to ScreenCaptureKit.")
         }
-        switch phase {
-        case 0:
-            phase = 1
-            let size = frame.image.extent.size
-            check(size.width >= 320 && size.height >= 240, "Own-window capture delivers native pixels")
-            let tl = pixel(frame.image, x: size.width * 0.25, y: size.height * 0.75)
-            let bl = pixel(frame.image, x: size.width * 0.25, y: size.height * 0.25)
-            samples = ["size": "\(size)", "topLeft": "\(tl)", "bottomLeft": "\(bl)"]
-            save(frame.image, name: "captured.png", engine: engine)
-            if viewers.count == 2 {
-                viewers[1].window?.setContentSize(NSSize(width: 600, height: 450))
-                check(viewers[0].surface.bounds.size != viewers[1].surface.bounds.size,
-                      "Viewers keep independent window sizes")
-            }
-            check(tl[0] > 220 && tl[1] < 30 && tl[2] < 30, "Captured top-left stays red")
-            check(bl[2] > 220 && bl[0] < 30, "Captured bottom-left stays blue")
-            let sourceCorners: [(CGFloat, CGFloat)] = [(1, 1), (size.width - 2, 1),
-                                                       (1, size.height - 2), (size.width - 2, size.height - 2)]
-            check(sourceCorners.allSatisfy { pixel(frame.image, x: $0.0, y: $0.1)[3] < 16 },
-                  "Rounded source corners retain transparency instead of being filled white")
-            guard failure == nil else { finish(error: failure); return }
-            if let surface = viewers.first?.surface {
-                let target = CGSize(width: 1920, height: 1080)
-                let fit = surface.renderedImage(size: target)
-                check(pixel(fit, x: 10, y: 540).prefix(3).allSatisfy { $0 < 10 }, "Fit letterboxes without stretching")
-                let framePlacement = ImageGeometry.placement(source: size, destination: target, mode: .fit)
-                let corners: [(CGFloat, CGFloat)] = [
-                    (framePlacement.minX + 1, framePlacement.minY + 1),
-                    (framePlacement.maxX - 2, framePlacement.minY + 1),
-                    (framePlacement.minX + 1, framePlacement.maxY - 2),
-                    (framePlacement.maxX - 2, framePlacement.maxY - 2)
-                ]
-                check(corners.allSatisfy {
-                    let value = pixel(fit, x: $0.0, y: $0.1)
-                    return value.prefix(3).allSatisfy { $0 < 8 } && value[3] > 247
-                }, "All four captured window corners blend into black with no white wedges")
-                save(fit, name: "fit-1920x1080.png", engine: engine)
-                viewers[0].options.crop.top = 0.5
-                let cropped = surface.renderedImage(size: target)
-                let placement = ImageGeometry.placement(source: CGSize(width: size.width, height: size.height / 2),
-                                                        destination: target, mode: .fit)
-                let croppedTopLeft = pixel(cropped, x: placement.minX + placement.width * 0.25,
-                                           y: placement.minY + placement.height * 0.75)
-                check(croppedTopLeft[2] > 220 && croppedTopLeft[0] < 30, "Top crop removes the top of the source")
-                let other = viewers[1].surface.renderedImage(size: target)
-                let originalPlacement = ImageGeometry.placement(source: size, destination: target, mode: .fit)
-                let otherTopLeft = pixel(other, x: originalPlacement.minX + originalPlacement.width * 0.25,
-                                         y: originalPlacement.minY + originalPlacement.height * 0.75)
-                check(otherTopLeft[0] > 220 && otherTopLeft[2] < 30, "Cropping one copy leaves the other copy unchanged")
-                save(cropped, name: "crop-top-half.png", engine: engine)
-                viewers[0].options.crop = .none
-                viewers[0].options.mode = .fill
-                let filled = surface.renderedImage(size: target)
-                check(pixel(filled, x: 10, y: 270).prefix(3).contains { $0 > 220 }, "Fill reaches the viewer edge")
-                viewers[0].options.mode = .actualPixels
-                let oneToOne = surface.renderedImage(size: target)
-                let expected = ImageGeometry.placement(source: size, destination: target, mode: .actualPixels)
-                check(pixel(oneToOne, x: expected.minX - 2, y: 540).prefix(3).allSatisfy { $0 < 10 }, "1:1 uses captured pixels")
-                viewers[0].options.mode = .fit
-                verifyViewerControls(target: target, sourceSize: size, engine: engine)
-            }
-            Task {
-                do {
-                    phase = 2
-                    source?.setContentSize(NSSize(width: 400, height: 400))
-                    try await Task.sleep(for: .milliseconds(200))
-                    if #available(macOS 14.4, *) {
-                        let content = try await SCShareableContent.currentProcess
-                        if let window = content.windows.first(where: { $0.windowID == self.session?.sourceID }) {
-                            try await self.session?.refresh(window: window)
-                        }
-                    }
-                    source?.contentView?.needsDisplay = true
-                } catch { finish(error: error.localizedDescription) }
-            }
-        case 2:
-            let expectedEdge = 400 * (source?.backingScaleFactor ?? 1)
-            if abs(frame.image.extent.width - expectedEdge) < 2 && abs(frame.image.extent.height - expectedEdge) < 2 {
-                check(true, "Source resizing updates capture size and aspect ratio")
-                check(viewers.count == 2 && viewers.allSatisfy { $0.surface.frameImage != nil },
-                      "One capture feeds two independent viewers")
-                save(frame.image, name: "resized-source.png", engine: engine)
-                phase = 3
-                Task {
-                    await session?.stop()
-                    check(session?.latestFrame == nil, "Stopping releases the retained capture frame")
-                    if CommandLine.arguments.contains("--check-performance"), failure == nil {
-                        await verifyPipeline()
-                    }
-                    if CommandLine.arguments.contains("--check-fullscreen"), failure == nil {
-                        verifyFullscreen()
-                    } else { finish(error: failure) }
-                }
-            }
-        default: break
+        let session = CaptureSession(source: WindowSource(window: window), detail: .native, fps: 30, trim: trimModel.trim)
+        self.session = session
+        session.onMetadata = { [weak self] in self?.metadata = $0 }
+        session.onFrame = { [weak self] frame in self?.viewers.forEach { $0.receive(frame) } }
+        session.onStatus = { [weak self] status in if let status { self?.finish(error: status) } }
+        session.onGeometryChange = { [weak self] in
+            self?.geometryReports += 1
+            Task { await self?.refreshSource() }
+        }
+        for sequence in 1...2 {
+            let viewer = MirrorWindowController(sourceID: window.windowID, title: "Calibration Copy",
+                                                sequence: sequence, engine: engine, trimModel: trimModel)
+            viewer.window?.level = .floating
+            viewer.onRequestFrame = { [weak session] in session?.latestFrame }
+            viewer.window?.setContentSize(NSSize(width: 640, height: 400))
+            let area = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+            viewer.window?.setFrameOrigin(NSPoint(x: area.minX + 20 + CGFloat(sequence - 1) * 670, y: area.minY + 60))
+            viewer.showWindow(nil)
+            viewers.append(viewer)
+        }
+        NSApp.activate()
+        try await session.start(window: window)
+        await waitUntil { session.latestFrame?.pictureArea != nil && self.viewers.allSatisfy { $0.surface.frameImage != nil } }
+        guard let frame = session.latestFrame else { throw ProbeError("No calibration frame arrived.") }
+
+        let scale = source.backingScaleFactor
+        let size = frame.image.extent.size
+        metadata["backingScale"] = "\(scale)"
+        samples["trimmedSize"] = "\(size)"
+        check(abs(size.width - 640 * scale) < 2 && abs(size.height - 360 * scale) < 2,
+              "Toolbar trim removes exactly the trimmed points, at native pixels")
+        let expected = expectedPicture(windowWidth: 640, scale: scale)
+        samples["expectedPicture"] = "\(expected)"
+        samples["detectedPicture"] = frame.pictureArea.map { "\($0)" } ?? "nil"
+        check(frame.pictureArea.map { close($0, expected, slack: max(3, scale * 2)) } == true,
+              "Detection finds the camera picture inside the flat background")
+        let picture = frame.pictureArea ?? expected
+        let tl = pixel(frame.image, x: picture.minX + picture.width * 0.25, y: picture.minY + picture.height * 0.75)
+        let bl = pixel(frame.image, x: picture.minX + picture.width * 0.25, y: picture.minY + picture.height * 0.25)
+        samples["topLeft"] = "\(tl)"; samples["bottomLeft"] = "\(bl)"
+        check(tl[0] > 170 && tl[1] < 90 && tl[2] < 90, "Captured picture top-left stays red (orientation and P3 color)")
+        check(bl[2] > 170 && bl[0] < 90, "Captured picture bottom-left stays blue")
+        save(frame.image, name: "captured-trimmed.png", engine: engine)
+        guard failure == nil else { return }
+
+        verifyRendering(sourceSize: size, expected: expected, engine: engine)
+        guard failure == nil else { return }
+
+        // The trim is shared by every copy and applies to the next frame.
+        trimModel.trim = .none
+        session.trim = .none
+        await waitUntil { abs((session.latestFrame?.image.extent.height ?? 0) - 400 * scale) < 2 }
+        check(abs((session.latestFrame?.image.extent.height ?? 0) - 400 * scale) < 2,
+              "Changing the trim updates the shared source area immediately")
+        trimModel.trim = SourceTrim(top: Double(ProbePattern.toolbar))
+        session.trim = trimModel.trim
+        await waitUntil { abs((session.latestFrame?.image.extent.height ?? 0) - 360 * scale) < 2 }
+
+        // Widen the source: the frame reports the change, capture follows, detection moves.
+        let reports = geometryReports
+        source.setContentSize(NSSize(width: 900, height: 400))
+        pattern?.needsDisplay = true
+        let wide = expectedPicture(windowWidth: 900, scale: scale)
+        await waitUntil {
+            guard let frame = session.latestFrame, let found = frame.pictureArea else { return false }
+            return abs(frame.image.extent.width - 900 * scale) < 2 && self.close(found, wide, slack: max(3, scale * 2))
+        }
+        metadata["geometryReportsDuringResize"] = "\(geometryReports - reports)"
+        samples["resizedPicture"] = session.latestFrame?.pictureArea.map { "\($0)" } ?? "nil"
+        check(abs((session.latestFrame?.image.extent.width ?? 0) - 900 * scale) < 2,
+              "Source resizing updates capture size and aspect ratio")
+        check(geometryReports > reports, "Frame metadata reports the resize without waiting for the poll")
+        check(session.latestFrame?.pictureArea.map { close($0, wide, slack: max(3, scale * 2)) } == true,
+              "Detection follows the picture after the source is resized")
+        check(viewers.allSatisfy { $0.surface.frameImage != nil }, "One capture feeds two independent viewers")
+        if let image = session.latestFrame?.image { save(image, name: "resized-source.png", engine: engine) }
+        await session.stop()
+        check(session.latestFrame == nil, "Stopping releases the retained capture frame")
+    }
+
+    /// The calibration picture in trimmed-source pixels, Core Image coordinates.
+    private func expectedPicture(windowWidth: CGFloat, scale: CGFloat) -> CGRect {
+        let topLeft = ProbePattern.pictureRect(in: NSSize(width: windowWidth, height: 400))
+            .offsetBy(dx: 0, dy: -ProbePattern.toolbar)
+        let pixels = CGRect(x: topLeft.minX * scale, y: topLeft.minY * scale,
+                            width: topLeft.width * scale, height: topLeft.height * scale)
+        return ImageGeometry.flipped(pixels, height: 360 * scale)
+    }
+
+    private func verifyRendering(sourceSize size: CGSize, expected: CGRect, engine: RenderEngine) {
+        let first = viewers[0], second = viewers[1]
+        let target = CGSize(width: 1920, height: 1080)
+        let placement = ImageGeometry.placement(source: size, destination: target, mode: .fit)
+        let picture = ImageGeometry.map(expected, source: size, into: placement)
+        let baseline = first.surface.renderedImage(size: target)
+        first.options.showGrid = true
+        let gridded = first.surface.renderedImage(size: target)
+        save(gridded, name: "grid-follows-picture.png", engine: engine)
+        // A white line over a saturated quadrant can't raise an already-full channel,
+        // so compare overall brightness.
+        func brightened(_ x: CGFloat, _ y: CGFloat) -> Bool {
+            let a = pixel(baseline, x: x, y: y), b = pixel(gridded, x: x, y: y)
+            return b.prefix(3).reduce(0) { $0 + Int($1) } > a.prefix(3).reduce(0) { $0 + Int($1) } + 120
+        }
+        func unchanged(_ x: CGFloat, _ y: CGFloat) -> Bool {
+            zip(pixel(baseline, x: x, y: y), pixel(gridded, x: x, y: y)).allSatisfy { abs(Int($0.0) - Int($0.1)) <= 3 }
+        }
+        let thirdX = picture.minX + picture.width / 3, thirdY = picture.minY + picture.height / 3
+        let probeY = picture.midY + 9, probeX = picture.midX + 9
+        check(brightened(thirdX, probeY) && brightened(picture.minX + picture.width * 2 / 3, probeY),
+              "Vertical grid lines sit at thirds of the camera picture")
+        check(brightened(probeX, thirdY), "Horizontal grid lines sit at thirds of the camera picture")
+        check(unchanged(placement.minX + placement.width / 3, probeY),
+              "Grid ignores thirds of the whole window")
+        check(unchanged((placement.minX + picture.minX) / 2, thirdY),
+              "Grid stays out of the gray background bars")
+        samples["gridPixel"] = "\(pixel(gridded, x: thirdX, y: probeY))"
+
+        let otherGrid = second.surface.renderedImage(size: target)
+        check(!second.options.showGrid &&
+              zip(pixel(otherGrid, x: thirdX, y: probeY), pixel(baseline, x: thirdX, y: probeY))
+                .allSatisfy { abs(Int($0.0) - Int($0.1)) <= 3 },
+              "Grid is independent for each copy")
+        first.options.showGrid = false
+
+        let iPad = CGSize(width: 2048, height: 1536)
+        let fit = first.surface.renderedImage(size: iPad)
+        check(pixel(fit, x: 1024, y: 10).prefix(3).allSatisfy { $0 < 10 }, "Fit letterboxes a wide source on a 4:3 iPad")
+        let fitPlacement = ImageGeometry.placement(source: size, destination: iPad, mode: .fit)
+        check(pixel(fit, x: fitPlacement.minX + 1, y: fitPlacement.minY + 1).prefix(3).allSatisfy { $0 < 30 },
+              "Rounded source corners blend into black with no white wedges")
+        second.options.mode = .fill
+        let filled = second.surface.renderedImage(size: iPad)
+        check(pixel(filled, x: 1024, y: 10).prefix(3).contains { $0 > 20 }, "Fill reaches the viewer edge")
+        check(first.options.mode == .fit, "Fit and Fill are independent for each copy")
+        second.options.mode = .fit
+    }
+
+    private func refreshSource() async {
+        guard #available(macOS 14.4, *), let session, let source else { return }
+        let content = try? await SCShareableContent.currentProcess
+        if let window = content?.windows.first(where: { $0.windowID == CGWindowID(source.windowNumber) }) {
+            try? await session.refresh(window: window)
         }
     }
 
-    /// Production model, real ScreenCaptureKit, same source, five viewers, native-resolution frames.
+    // MARK: Production model, real ScreenCaptureKit, three live viewers
+
     private func verifyPipeline() async {
-        guard #available(macOS 14.4, *), let source, let pattern = source.contentView as? ProbePattern else { return }
+        guard #available(macOS 14.4, *), let source, let pattern else { return }
         for viewer in viewers { viewer.window?.orderOut(nil) }
         source.setContentSize(NSSize(width: 1600, height: 900))
         pattern.animate = true
@@ -214,60 +243,49 @@ final class CaptureProbe {
             guard let session = model.sessions[chosen.id], let live = model.mirrors.values.first else {
                 check(false, "Production model starts its capture stream"); return
             }
-            live.options.showInfo = false
-            live.window?.level = .floating
+            live.trimModel.trim = SourceTrim(top: Double(ProbePattern.toolbar))
+            live.perform(.duplicate); live.perform(.duplicate)
             let area = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-            live.window?.setContentSize(NSSize(width: min(960, area.width * 0.56), height: min(640, area.height * 0.75)))
-            live.window?.setFrameOrigin(NSPoint(x: area.minX + 12, y: area.minY + 30))
-            await waitUntil { session.active && session.latestFrame != nil }
-            let nativeSize = CGSize(width: 1600 * source.backingScaleFactor, height: 900 * source.backingScaleFactor)
-            check(session.latestFrame?.image.extent.size == nativeSize, "Stress capture keeps native source pixels")
-            var frozen: [MirrorWindowController] = []
-            for _ in 0..<4 {
-                let ids = Set(model.mirrors.keys)
-                await model.duplicate(chosen)
-                guard let viewer = model.mirrors.values.first(where: { !ids.contains($0.id) }) else { continue }
-                viewer.options.showInfo = false
+            let copies = Array(model.mirrors.values)
+            for (index, viewer) in copies.enumerated() {
                 viewer.window?.level = .floating
-                viewer.window?.setContentSize(NSSize(width: max(300, area.width * 0.3), height: 300))
-                viewer.window?.setFrameOrigin(NSPoint(x: area.minX + area.width * 0.62,
-                                                      y: area.minY + 30 + CGFloat(frozen.count) * 26))
-                let before = session.deliveredFrameCount
-                await waitUntil { session.deliveredFrameCount > before && viewer.surface.frameImage != nil }
-                guard let original = viewer.surface.frameImage else { check(false, "Freeze viewer receives a frame"); continue }
-                let red = pixel(original, x: nativeSize.width / 4, y: nativeSize.height * 3 / 4)
-                viewer.perform(.pause)
-                check(viewer.options.paused && viewer.hasOwnedFrozenImage, "Frozen viewer owns independent GPU storage")
-                if let image = viewer.surface.frameImage {
-                    check(image.extent.size == nativeSize, "Freeze preserves full native resolution")
-                    let copied = pixel(image, x: nativeSize.width / 4, y: nativeSize.height * 3 / 4)
-                    check(zip(red, copied).allSatisfy { abs(Int($0.0) - Int($0.1)) <= 2 },
-                          "GPU freeze preserves pixel orientation and color")
-                }
-                frozen.append(viewer)
+                viewer.window?.setContentSize(NSSize(width: min(460, area.width / 3.2), height: 300))
+                viewer.window?.setFrameOrigin(NSPoint(x: area.minX + 12 + CGFloat(index) * (area.width / 3),
+                                                      y: area.minY + 30))
+                viewer.showWindow(nil)
             }
-            check(frozen.count == 4 && model.sessions.count == 1, "Five viewers share one capture stream")
-            let frames = session.deliveredFrameCount, labels = live.infoRefreshCount
-            let renders = live.surface.completedFrames, gpu = live.surface.totalGPUTime
+            let scale = source.backingScaleFactor
+            let nativeSize = CGSize(width: 1600 * scale, height: (900 - ProbePattern.toolbar) * scale)
+            await waitUntil { session.active && session.latestFrame?.image.extent.size == nativeSize }
+            check(session.latestFrame?.image.extent.size == nativeSize,
+                  "A trim set in one copy applies to the shared capture at native pixels")
+            check(copies.count == 3 && model.sessions.count == 1, "Three viewers share one capture stream")
+            await waitUntil { copies.allSatisfy { $0.surface.completedFrames > 0 } }
+            let frames = session.deliveredFrameCount
+            let renders = copies.map { $0.surface.completedFrames }
+            let gpu = copies.reduce(0) { $0 + $1.surface.totalGPUTime }
+            let dropped = copies.reduce(0) { $0 + $1.surface.droppedRenders }
             let cpu = cpuSeconds(), uptime = ProcessInfo.processInfo.systemUptime
             try? await Task.sleep(for: .seconds(5))
             let duration = ProcessInfo.processInfo.systemUptime - uptime
             let delivered = session.deliveredFrameCount - frames
-            let completed = live.surface.completedFrames - renders
+            let completed = zip(copies, renders).map { $0.0.surface.completedFrames - $0.1 }
+            let gpuTime = copies.reduce(0) { $0 + $1.surface.totalGPUTime } - gpu
             performance = ["scope": "Own animated calibration window; not a camera or physical Sidecar benchmark",
                 "durationSeconds": duration, "nativeSourceWidth": nativeSize.width, "nativeSourceHeight": nativeSize.height,
-                "liveViewers": 1, "independentlyFrozenViewers": frozen.count, "captureStreams": model.sessions.count,
+                "liveViewers": copies.count, "captureStreams": model.sessions.count,
                 "deliveredFrames": delivered, "deliveredFPS": Double(delivered) / duration,
                 "cpuPercentOfOneCore": (cpuSeconds() - cpu) / duration * 100,
-                "completedViewerRenders": completed,
-                "meanGPUTimeMilliseconds": completed > 0 ? (live.surface.totalGPUTime - gpu) / Double(completed) * 1000 : 0,
-                "droppedRenderRequests": live.surface.droppedRenders]
-            check(delivered >= 20, "Four independently frozen viewers do not starve the live capture pool")
-            check(live.infoRefreshCount == labels, "Ordinary frames do not recalculate pixel-information labels")
+                "completedViewerRenders": completed.reduce(0, +),
+                "meanGPUTimeMillisecondsPerRender": completed.reduce(0, +) > 0 ? gpuTime / Double(completed.reduce(0, +)) * 1000 : 0,
+                "droppedRenderRequests": copies.reduce(0) { $0 + $1.surface.droppedRenders } - dropped,
+                "detectedPicture": session.latestFrame?.pictureArea.map { "\($0)" } ?? "nil"]
+            check(delivered >= 60, "Live capture keeps delivering frames to three viewers")
+            check(completed.allSatisfy { $0 >= 30 }, "Every live viewer keeps rendering")
             check(session.latestFrame?.image.extent.size == nativeSize, "Stress test never reduces capture resolution")
+            check(session.latestFrame?.pictureArea != nil, "Detection keeps running during live capture")
 
-            let crop = ImageCrop(left: 0.1, top: 0.05), viewport = ImageViewport(zoom: 2, pan: CGPoint(x: 0.2, y: -0.1))
-            live.options.crop = crop; live.options.viewport = viewport; live.options.showGrid = true
+            live.options.showGrid = true; live.options.mode = .fill
             model.prepareForSleep()
             await waitUntil { !session.active && !session.starting }
             check(!session.active && session.latestFrame == nil, "Sleep releases the capture stream and live buffers")
@@ -275,35 +293,20 @@ final class CaptureProbe {
             await waitUntil { session.active && session.latestFrame != nil }
             check(session.active && session.latestFrame?.image.extent.size == nativeSize,
                   "Wake restarts the same selected source at native resolution")
-            check(live.options.crop == crop && live.options.viewport == viewport && live.options.showGrid,
-                  "Wake preserves independent crop, grid, zoom, and pan")
+            check(live.options.showGrid && live.options.mode == .fill && live.trimModel.trim.top == Double(ProbePattern.toolbar),
+                  "Wake preserves each copy's grid and fit, and the shared trim")
 
-            live.perform(.pause)
+            for viewer in copies { viewer.window?.miniaturize(nil) }
             await waitUntil { !session.active }
-            check(!session.active && session.latestFrame == nil, "All-frozen viewers stop unnecessary capture work")
-            live.perform(.pause)
-            check(live.surface.frameImage?.extent.size == nativeSize && live.hasOwnedFrozenImage,
-                  "Resume keeps the full-resolution snapshot visible while capture restarts")
-            await waitUntil { session.active && session.latestFrame != nil }
+            check(!session.active && copies.allSatisfy { $0.surface.frameImage == nil },
+                  "Minimized viewers release live frames and stop capture")
+            for viewer in copies { viewer.window?.deminiaturize(nil) }
+            await waitUntil { session.active && copies.allSatisfy { $0.surface.frameImage != nil } }
             check(session.active && session.latestFrame?.image.extent.size == nativeSize,
-                  "Resuming a frozen viewer restores full-resolution capture")
-
-            live.window?.miniaturize(nil)
-            await waitUntil { !session.active }
-            let accepted = live.acceptedFrames
-            try? await Task.sleep(for: .milliseconds(250))
-            check(!session.active && live.surface.frameImage == nil && live.acceptedFrames == accepted,
-                  "Minimized viewers release live frames and stop capture when no live viewer is visible")
-            live.window?.deminiaturize(nil)
-            await waitUntil { session.active && live.surface.frameImage != nil }
-            check(session.active && live.surface.frameImage?.extent.size == nativeSize,
-                  "Restoring a viewer resumes native pixels without recreating its settings")
-            let lastFrame = session.latestFrame
+                  "Restoring viewers resumes native pixels without recreating their settings")
             model.shutdown(); verificationModel = nil
             animationTimer?.invalidate(); animationTimer = nil
             for viewer in viewers { viewer.showWindow(nil) }
-            try? await Task.sleep(for: .milliseconds(150))
-            if let lastFrame { for viewer in viewers { viewer.receive(lastFrame) } }
         } catch { check(false, "Pipeline verification: \(error.localizedDescription)") }
     }
 
@@ -321,116 +324,15 @@ final class CaptureProbe {
             Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
     }
 
-    private func verifyViewerControls(target: CGSize, sourceSize: CGSize, engine: RenderEngine) {
-        guard let viewer = viewers.first else { return }
-        let surface = viewer.surface
-        let baseline = surface.renderedImage(size: target)
-        viewer.perform(.grid)
-        let gridded = surface.renderedImage(size: target)
-        let placement = ImageGeometry.placement(source: sourceSize, destination: target, mode: .fit)
-        let x = placement.minX + placement.width / 3, y = placement.minY + placement.height / 4
-        let plainPixel = pixel(baseline, x: x, y: y), gridPixel = pixel(gridded, x: x, y: y)
-        check(gridPixel[0] > plainPixel[0] + 50 && gridPixel[1] > plainPixel[1] + 50,
-              "Rule of thirds grid renders over the image through the real GPU pipeline")
-        check(pixel(gridded, x: 10, y: 540).prefix(3).allSatisfy { $0 < 10 },
-              "Grid stays off the letterbox bars")
-        check(!viewers[1].options.showGrid && viewers[1].options.viewport == .identity,
-              "Grid and zoom controls are independent for each copy")
-        save(gridded, name: "grid.png", engine: engine)
-        viewer.perform(.grid)
-        viewer.perform(.zoomIn)
-        check(abs(viewer.options.viewport.zoom - 1.25) < 0.001, "Zoom In changes this viewer's magnification")
-        let zoomed = surface.renderedImage(size: target)
-        check(pixel(zoomed, x: 100, y: 270).prefix(3).contains { $0 > 220 }, "Zoom magnifies rendered pixels")
-        save(zoomed, name: "zoom-125-percent.png", engine: engine)
-        viewer.perform(.resetZoom)
-        check(viewer.options.viewport == .identity, "Reset Zoom recenters and restores base sizing")
-        verifyOverlayResolution(viewer, context: "Windowed")
-        if let grid = viewer.floatingControls.button(for: .grid),
-           let plus = viewer.floatingControls.button(for: .zoomIn),
-           let fit = viewer.floatingControls.button(for: .fit) {
-            grid.performClick(nil)
-            check(viewer.options.showGrid, "Floating Grid button toggles this copy's overlay")
-            samples["floatingControlState"] = "plus=\(plus.isEnabled), visible=\(viewer.window?.isVisible ?? false), occlusion=\(viewer.window?.occlusionState.rawValue ?? 0), frame=\(viewer.surface.frameImage != nil)"
-            plus.performClick(nil)
-            check(viewer.options.viewport.zoom > 1, "Floating plus button magnifies this copy")
-            fit.performClick(nil)
-            check(viewer.options.mode == .fit && viewer.options.viewport == .identity,
-                  "Floating Fit button restores fit without resizing the viewer")
-            grid.performClick(nil)
-        } else { check(false, "Floating controls are available") }
-
-        // Exercise the same native AppKit control actions Sidecar presents to the user.
-        if let bar = viewer.touchBar,
-           let grid = (bar.item(forIdentifier: MirrorWindowController.touchGridID) as? NSCustomTouchBarItem)?.view as? NSButton,
-           let zoom = bar.item(forIdentifier: MirrorWindowController.touchZoomID) as? NSGroupTouchBarItem,
-           let plus = (zoom.groupTouchBar.item(forIdentifier: MirrorWindowController.touchZoomInID) as? NSCustomTouchBarItem)?.view as? NSButton,
-           let minus = (zoom.groupTouchBar.item(forIdentifier: MirrorWindowController.touchZoomOutID) as? NSCustomTouchBarItem)?.view as? NSButton,
-           let fit = (zoom.groupTouchBar.item(forIdentifier: MirrorWindowController.touchFitID) as? NSCustomTouchBarItem)?.view as? NSButton,
-           let pause = (bar.item(forIdentifier: MirrorWindowController.touchPauseID) as? NSCustomTouchBarItem)?.view as? NSButton {
-            grid.performClick(nil)
-            check(viewer.options.showGrid, "Native Sidecar Touch Bar Grid button toggles the overlay")
-            plus.performClick(nil)
-            check(viewer.options.viewport.zoom > 1, "Native Sidecar Touch Bar plus button zooms the viewer")
-            // Published options update native enabled states on the next run-loop turn.
-            minus.isEnabled = true
-            minus.performClick(nil)
-            check(abs(viewer.options.viewport.zoom - 1) < 0.001, "Native Sidecar Touch Bar minus button zooms out")
-            viewer.perform(.zoomIn)
-            fit.performClick(nil)
-            check(viewer.options.mode == .fit && viewer.options.viewport == .identity,
-                  "Native Sidecar Touch Bar Fit button resets zoom and pan")
-            pause.performClick(nil)
-            check(viewer.options.paused, "Native Sidecar Touch Bar Freeze button pauses the viewer")
-            pause.performClick(nil); grid.performClick(nil)
-        } else { check(false, "Native Sidecar Touch Bar controls are available") }
-    }
-
-    private func verifyOverlayResolution(_ viewer: MirrorWindowController, context: String) {
-        guard let window = viewer.window else { check(false, "Missing viewer for resolution check"); return }
-        let surface = viewer.surface
-        surface.layoutSubtreeIfNeeded()
-        surface.draw()
-        let frame = window.frame, bounds = surface.bounds, drawable = surface.drawableSize
-        let backing = surface.convertToBacking(bounds), scale = window.backingScaleFactor
-        let source = surface.frameImage?.extent
-        let mode = viewer.options.mode, crop = viewer.options.crop, viewport = viewer.options.viewport
-        let initialVisibility = viewer.options.showQuickControls
-        func displayMode() -> [Int]? {
-            guard let id = window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
-                  let mode = CGDisplayCopyDisplayMode(id.uint32Value) else { return nil }
-            return [mode.width, mode.height, mode.pixelWidth, mode.pixelHeight]
-        }
-        let display = displayMode()
-        viewer.perform(.quickControls)
-        surface.layoutSubtreeIfNeeded()
-        surface.draw()
-        check(viewer.floatingControls.isHidden == initialVisibility, "\(context) floating controls toggle visibility")
-        check(window.frame == frame && surface.bounds == bounds && surface.drawableSize == drawable &&
-              surface.convertToBacking(surface.bounds) == backing && window.backingScaleFactor == scale,
-              "\(context) controls preserve viewer size, drawable pixels, and backing scale")
-        check(displayMode() == display && surface.frameImage?.extent == source,
-              "\(context) controls preserve display mode and captured image resolution")
-        check(viewer.options.mode == mode && viewer.options.crop == crop && viewer.options.viewport == viewport,
-              "\(context) controls preserve fit, crop, zoom, and pan")
-        viewer.perform(.quickControls)
-        surface.layoutSubtreeIfNeeded()
-        surface.draw()
-        check(window.frame == frame && surface.drawableSize == drawable && viewer.options.showQuickControls == initialVisibility,
-              "\(context) showing controls again preserves the original pixel dimensions")
-    }
+    // MARK: Native fullscreen
 
     private func verifyFullscreen() {
         guard let viewer = viewers.first, let window = viewer.window else {
             finish(error: "Missing viewer for fullscreen check"); return
         }
         let originalFrame = window.frame
-        let crop = ImageCrop(left: 0.1, top: 0.05, right: 0.02, bottom: 0.03)
-        viewer.options.crop = crop
         viewer.options.mode = .fill
         viewer.options.showGrid = true
-        let viewport = ImageViewport(zoom: 2, pan: CGPoint(x: 0.25, y: -0.3))
-        viewer.options.viewport = viewport
         window.level = .floating
         viewer.onFullscreenStateChange = { [weak self, weak viewer] entered in
             guard let self, let viewer, let window = viewer.window else { return }
@@ -439,18 +341,13 @@ final class CaptureProbe {
                 self.check(NSApp.activationPolicy() == .regular, "Native app menus are available in fullscreen")
                 let presentation = NSApp.currentSystemPresentationOptions
                 self.metadata["systemPresentationOptions"] = "\(presentation.rawValue)"
-                self.metadata["requestedPresentationOptions"] = "\(viewer.fullscreenPresentationOptions.rawValue)"
                 self.check(presentation.contains(.autoHideToolbar), "Native toolbar is configured to reveal on rollover")
                 self.check(viewer.fullscreenPresentationOptions.contains(.autoHideMenuBar),
                            "Viewer requests native top-edge menu reveal")
-                // macOS can keep the menu bar visible according to the user's setting.
-                self.check(!presentation.contains(.hideMenuBar) || presentation.contains(.autoHideMenuBar),
-                           "System keeps the native menu bar accessible in fullscreen")
-                self.check(viewer.options.crop == crop && viewer.options.mode == .fill,
-                           "Fullscreen preserves the copy's crop and fit settings")
-                self.check(viewer.options.showGrid && viewer.options.viewport == viewport,
-                           "Fullscreen preserves independent grid, zoom, and pan")
-                self.verifyOverlayResolution(viewer, context: "Fullscreen")
+                self.check(viewer.options.mode == .fill && viewer.options.showGrid,
+                           "Fullscreen preserves the copy's fit and grid")
+                let backing = viewer.surface.convertToBacking(viewer.surface.bounds).size
+                self.check(viewer.surface.drawableSize == backing, "Fullscreen renders at the display's backing pixels")
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(500))
                     viewer.perform(.fullscreen)
@@ -468,16 +365,24 @@ final class CaptureProbe {
         viewer.perform(.fullscreen)
     }
 
+    // MARK: Helpers
+
+    private func close(_ a: CGRect, _ b: CGRect, slack: CGFloat) -> Bool {
+        abs(a.minX - b.minX) <= slack && abs(a.minY - b.minY) <= slack &&
+        abs(a.maxX - b.maxX) <= slack && abs(a.maxY - b.maxY) <= slack
+    }
+
     private func check(_ condition: Bool, _ name: String) {
         if condition { checks.append(name) } else if failure == nil { failure = name }
     }
 
+    /// Reads back in sRGB so pure source colors keep familiar values.
     private func pixel(_ image: CIImage, x: CGFloat, y: CGFloat) -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: 4)
         bytes.withUnsafeMutableBytes { buffer in
             engine?.context.render(image, toBitmap: buffer.baseAddress!, rowBytes: 4,
                                    bounds: CGRect(x: floor(x), y: floor(y), width: 1, height: 1),
-                                   format: .RGBA8, colorSpace: engine?.colorSpace)
+                                   format: .RGBA8, colorSpace: readback)
         }
         return bytes
     }
@@ -506,26 +411,68 @@ final class CaptureProbe {
     }
 }
 
+/// A Capture One–style Live View window: busy toolbar, flat background, noisy 4:3 picture.
 private final class ProbePattern: NSView {
+    static let toolbar: CGFloat = 40
     var animate = false
     var tick = 0
+    private var noise: (size: CGSize, image: NSImage)?
     override var isFlipped: Bool { true }
+
+    /// The picture's frame in flipped window points: 4:3, fit and centered below the toolbar.
+    static func pictureRect(in size: NSSize) -> CGRect {
+        let area = CGRect(x: 0, y: toolbar, width: size.width, height: size.height - toolbar)
+        let unit = min(area.width / 4, area.height / 3)
+        return CGRect(x: area.midX - unit * 2, y: area.midY - unit * 1.5, width: unit * 4, height: unit * 3).integral
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
-        NSBezierPath(roundedRect: bounds, xRadius: 20, yRadius: 20).addClip()
-        let halfW = bounds.width / 2, halfH = bounds.height / 2
-        for (color, rect) in [
-            (NSColor.red, NSRect(x: 0, y: 0, width: halfW, height: halfH)),
-            (.green, NSRect(x: halfW, y: 0, width: halfW, height: halfH)),
-            (.blue, NSRect(x: 0, y: halfH, width: halfW, height: halfH)),
-            (.yellow, NSRect(x: halfW, y: halfH, width: halfW, height: halfH))
-        ] { color.setFill(); rect.fill() }
+        NSBezierPath(roundedRect: bounds, xRadius: 12, yRadius: 12).addClip()
+        NSColor(srgbRed: 58 / 255, green: 58 / 255, blue: 58 / 255, alpha: 1).setFill()
+        bounds.fill()
+        for i in 0...Int(bounds.width / 6) {
+            NSColor(white: i % 2 == 0 ? 0.85 : 0.62, alpha: 1).setFill()
+            NSRect(x: CGFloat(i) * 6, y: 0, width: 6, height: Self.toolbar).fill()
+        }
+        let picture = Self.pictureRect(in: bounds.size)
+        NSGraphicsContext.current?.imageInterpolation = .none
+        pictureImage(points: picture.size).draw(in: picture, from: .zero, operation: .sourceOver,
+                                                fraction: 1, respectFlipped: true, hints: nil)
         if animate {
             NSColor.white.setFill()
-            let travel = max(1, Int(bounds.width - 80))
-            let x = CGFloat(30 + tick % travel)
-            NSRect(x: x, y: bounds.height - 45, width: 20, height: 20).fill()
+            let travel = max(1, Int(picture.width - 60))
+            NSRect(x: picture.minX + CGFloat(20 + tick % travel), y: picture.minY + 20, width: 20, height: 20).fill()
         }
+    }
+
+    /// Quadrant colors with per-pixel noise at the window's backing resolution.
+    private func pictureImage(points: CGSize) -> NSImage {
+        if let noise, noise.size == points { return noise.image }
+        let scale = window?.backingScaleFactor ?? 2
+        let width = Int(points.width * scale), height = Int(points.height * scale)
+        var bytes = [UInt8](repeating: 255, count: width * height * 4)
+        var state: UInt32 = 0x2545F491
+        let quadrants: [[Int]] = [[230, 20, 20], [20, 200, 40], [20, 40, 230], [230, 220, 20]]
+        for y in 0..<height {
+            for x in 0..<width {
+                let q = (y < height / 2 ? 0 : 2) + (x < width / 2 ? 0 : 1)
+                let i = (y * width + x) * 4
+                for c in 0..<3 {
+                    state = state &* 1_664_525 &+ 1_013_904_223
+                    bytes[i + c] = UInt8(clamping: quadrants[q][c] + Int(state >> 24) % 25 - 12)
+                }
+            }
+        }
+        let image: NSImage = bytes.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue),
+                  let cg = context.makeImage() else { return NSImage(size: points) }
+            return NSImage(cgImage: cg, size: points)
+        }
+        noise = (points, image)
+        return image
     }
 }

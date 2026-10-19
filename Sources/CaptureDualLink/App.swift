@@ -19,7 +19,7 @@ enum CaptureDualLinkApp {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     private var picker: NSPanel?
-    private var model: AppModel!
+    private var model: AppModel?
     private var probe: CaptureProbe?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -29,7 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             probe?.run()
             return
         }
-        model = AppModel()
+        let model = AppModel()
+        self.model = model
         model.onCountChange = { [weak self] in self?.updateStatus() }
         model.onShowPicker = { [weak self] in self?.showPicker() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -40,7 +41,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         updateStatus()
         createMainMenu()
-        if CommandLine.arguments.contains("--display-check") { model.openDisplayCheck() }
         showPicker()
     }
 
@@ -73,21 +73,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         add("Fit — Show Entire Image", .fit, "1")
         add("Fill — Crop to Window", .fill, "2")
-        add("Actual Pixels — 1:1", .actualPixels, "3")
-        viewMenu.addItem(.separator())
         add("Rule of Thirds Grid", .grid, "g")
-        add("Zoom In", .zoomIn, "=")
-        add("Zoom Out", .zoomOut, "-")
-        add("Reset Zoom", .resetZoom, "0")
-        add("Show Floating Controls", .quickControls, "t", [.command, .shift])
         viewMenu.addItem(.separator())
-        add("Crop Image…", .crop, "k")
-        add("Reset Crop", .resetCrop, "r", [.command, .shift])
-        add("Match Source Aspect Ratio", .matchAspect)
-        add("Set Viewer Size in Pixels…", .pixelSize)
+        add("Trim Toolbar…", .trim, "k")
+        add("Reset Trim", .resetTrim, "r", [.command, .shift])
         viewMenu.addItem(.separator())
-        add("Freeze Image", .pause, "p", [.command, .shift])
-        add("Show Pixel Information", .pixelInfo, "i", [.command, .shift])
         add("Keep on Top", .keepOnTop)
         add("Create Another Copy", .duplicate, "d")
         viewMenu.addItem(.separator())
@@ -118,17 +108,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     private func updateStatus() {
-        statusItem?.button?.title = model.mirrorCount > 0 ? " \(model.mirrorCount)" : ""
-        statusItem?.button?.toolTip = "Capture DualLink · \(model.mirrorCount) active copies\nClick to choose a window. Right-click for actions."
+        let count = model?.mirrorCount ?? 0
+        statusItem?.button?.title = count > 0 ? " \(count)" : ""
+        statusItem?.button?.toolTip = "Capture DualLink · \(count) active copies\nClick to choose a window. Right-click for actions."
     }
 
     @objc private func statusClicked(_ sender: Any?) {
+        guard let model else { return }
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
             let title = NSMenuItem(title: "Capture DualLink", action: nil, keyEquivalent: "")
             title.isEnabled = false; menu.addItem(title)
             menu.addItem(withTitle: "Duplicate a Window…", action: #selector(showPicker), keyEquivalent: "").target = self
-            menu.addItem(withTitle: "Open Display Check", action: #selector(displayCheck), keyEquivalent: "").target = self
             if !model.mirrors.isEmpty {
                 menu.addItem(.separator())
                 for mirror in model.mirrors.values.sorted(by: { ($0.window?.title ?? "") < ($1.window?.title ?? "") }) {
@@ -149,8 +140,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     @objc func showPicker() {
+        guard let model else { return } // Self-test runs have no picker.
         if picker == nil {
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 470, height: 540),
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 470, height: 500),
                                 styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
             panel.title = "Capture DualLink"
             panel.titleVisibility = .hidden
@@ -164,18 +156,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             picker = panel
         }
         picker?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         Task { await model.refreshSources() }
     }
 
     @objc private func revealCopy(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? UUID, let mirror = model.mirrors[id] else { return }
+        guard let id = sender.representedObject as? UUID, let mirror = model?.mirrors[id] else { return }
         mirror.window?.deminiaturize(nil); mirror.showWindow(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
-    @objc private func displayCheck() { model.openDisplayCheck() }
-    @objc private func permissionSettings() { model.openPermissionSettings() }
-    @objc private func closeCopies() { model.closeAll() }
-    @objc private func quitApp() { model.closeAll(); NSApp.terminate(nil) }
+    @objc private func permissionSettings() { model?.openPermissionSettings() }
+    @objc private func closeCopies() { model?.closeAll() }
+    @objc private func quitApp() { model?.closeAll(); NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) { model?.shutdown() }
 }

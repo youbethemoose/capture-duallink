@@ -12,6 +12,12 @@ final class GeometryTests: XCTestCase {
                                                    pixelScale: 2, bufferSize: CGSize(width: 640, height: 480))
         XCTAssertEqual(rect, CGRect(x: 0, y: 120, width: 640, height: 360))
     }
+    func testFlipRoundTripsBetweenTopLeftAndCoreImageOrigins() {
+        let topLeft = CGRect(x: 10, y: 20, width: 100, height: 50)
+        let ci = ImageGeometry.flipped(topLeft, height: 480)
+        XCTAssertEqual(ci, CGRect(x: 10, y: 410, width: 100, height: 50))
+        XCTAssertEqual(ImageGeometry.flipped(ci, height: 480), topLeft)
+    }
     func testFitMacCameraImageOnFourByThreeIPadPreservesAspect() {
         let rect = ImageGeometry.placement(source: CGSize(width: 1920, height: 1080),
                                            destination: CGSize(width: 2048, height: 1536), mode: .fit)
@@ -27,27 +33,33 @@ final class GeometryTests: XCTestCase {
         XCTAssertEqual(rect.midX, 1024, accuracy: 0.001)
         XCTAssertEqual(rect.width / rect.height, 16.0 / 9.0, accuracy: 0.001)
     }
-    func testOneToOneUsesRealPixelsOnEitherDisplay() {
-        let source = CGSize(width: 1200, height: 800)
-        for destination in [CGSize(width: 1512, height: 982), CGSize(width: 3024, height: 1964)] {
-            let rect = ImageGeometry.placement(source: source, destination: destination, mode: .actualPixels)
-            XCTAssertEqual(rect.size, source)
-            XCTAssertEqual(rect.midX, destination.width / 2)
-        }
+    func testPictureAreaMapsThroughFitPlacement() {
+        // A 4:3 picture pillarboxed in a 16:9 source, shown on a 4:3 iPad.
+        let source = CGSize(width: 1280, height: 720), destination = CGSize(width: 2048, height: 1536)
+        let placement = ImageGeometry.placement(source: source, destination: destination, mode: .fit)
+        let picture = ImageGeometry.map(CGRect(x: 160, y: 0, width: 960, height: 720), source: source, into: placement)
+        XCTAssertEqual(picture.minX, 256, accuracy: 0.001)
+        XCTAssertEqual(picture.width, 1536, accuracy: 0.001)
+        XCTAssertEqual(picture.height, 1152, accuracy: 0.001)
+        XCTAssertEqual(picture.minY, placement.minY, accuracy: 0.001)
     }
-    func testTopCropUsesCoreImageBottomLeftOrigin() {
-        let rect = ImageCrop(left: 0.1, top: 0.2, right: 0.05, bottom: 0.1)
-            .rect(in: CGSize(width: 1000, height: 500))
-        XCTAssertEqual(rect.minX, 100, accuracy: 0.001)
-        XCTAssertEqual(rect.minY, 50, accuracy: 0.001)
-        XCTAssertEqual(rect.width, 850, accuracy: 0.001)
-        XCTAssertEqual(rect.height, 350, accuracy: 0.001)
+    func testTrimUsesPointsSoToolbarStaysTrimmedOnRetina() {
+        let trim = SourceTrim(top: 44, left: 0, bottom: 20, right: 0)
+        XCTAssertEqual(trim.apply(to: CGRect(x: 0, y: 0, width: 1600, height: 1000), pixelScale: 2),
+                       CGRect(x: 0, y: 88, width: 1600, height: 872))
+        XCTAssertEqual(trim.apply(to: CGRect(x: 0, y: 0, width: 800, height: 500), pixelScale: 1),
+                       CGRect(x: 0, y: 44, width: 800, height: 436))
     }
-    func testInvalidCropCannotMakeEmptyImage() {
-        let rect = ImageCrop(left: 1, top: .nan, right: 1, bottom: 1)
-            .rect(in: CGSize(width: 1000, height: 500))
-        XCTAssertGreaterThan(rect.width, 0)
-        XCTAssertGreaterThan(rect.height, 0)
+    func testTrimIsRelativeToContentOrigin() {
+        let trim = SourceTrim(top: 10, left: 5)
+        XCTAssertEqual(trim.apply(to: CGRect(x: 0, y: 120, width: 640, height: 360), pixelScale: 2),
+                       CGRect(x: 10, y: 140, width: 630, height: 340))
+    }
+    func testOversizedOrInvalidTrimCannotMakeEmptyImage() {
+        let rect = SourceTrim(top: 900, left: .nan, bottom: 900, right: -50)
+            .apply(to: CGRect(x: 0, y: 0, width: 1000, height: 500), pixelScale: 2)
+        XCTAssertGreaterThanOrEqual(rect.height, 16)
+        XCTAssertEqual(rect.width, 1000)
         XCTAssertTrue(rect.minY.isFinite)
     }
     func testCaptureRetinaScaleAndQualityCapPreservePortraitShape() {
@@ -62,48 +74,5 @@ final class GeometryTests: XCTestCase {
         XCTAssertEqual(ImageGeometry.placement(source: .zero, destination: CGSize(width: 100, height: 100), mode: .fit), .zero)
         XCTAssertEqual(ImageGeometry.placement(source: CGSize(width: 100, height: 100),
                                                destination: CGSize(width: CGFloat.infinity, height: 100), mode: .fill), .zero)
-    }
-
-    func testZoomAndPanCannotExposeEmptyEdgesOnAnOverflowingAxis() {
-        let source = CGSize(width: 1920, height: 1080), destination = CGSize(width: 2048, height: 1536)
-        let viewport = ImageViewport(zoom: 2).panned(by: CGPoint(x: 100_000, y: -100_000),
-                                                    source: source, destination: destination, mode: .fit)
-        let rect = ImageGeometry.placement(source: source, destination: destination, mode: .fit, viewport: viewport)
-        XCTAssertEqual(rect.minX, 0, accuracy: 0.001)
-        XCTAssertEqual(rect.maxY, destination.height, accuracy: 0.001)
-        XCTAssertEqual(viewport.pan, CGPoint(x: 1, y: -1))
-    }
-
-    func testPanDoesNotMoveALetterboxedAxis() {
-        let source = CGSize(width: 1920, height: 1080), destination = CGSize(width: 2048, height: 1536)
-        let viewport = ImageViewport.identity.panned(by: CGPoint(x: 400, y: 200), source: source,
-                                                     destination: destination, mode: .fit)
-        XCTAssertEqual(viewport, .identity)
-        let rect = ImageGeometry.placement(source: source, destination: destination, mode: .fit, viewport: viewport)
-        XCTAssertEqual(rect.midY, destination.height / 2)
-    }
-
-    func testPinchKeepsImageUnderFocalPointAcrossRetinaScales() {
-        for scale: CGFloat in [1, 2] {
-            let source = CGSize(width: 1000 * scale, height: 1000 * scale)
-            let destination = CGSize(width: 800 * scale, height: 800 * scale)
-            let anchor = CGPoint(x: 250 * scale, y: 300 * scale)
-            let before = ImageGeometry.placement(source: source, destination: destination, mode: .fit)
-            let viewport = ImageViewport.identity.zoomed(by: 2, source: source, destination: destination,
-                                                         mode: .fit, anchor: anchor)
-            let after = ImageGeometry.placement(source: source, destination: destination, mode: .fit, viewport: viewport)
-            XCTAssertEqual((anchor.x - before.minX) / before.width, (anchor.x - after.minX) / after.width, accuracy: 0.001)
-            XCTAssertEqual((anchor.y - before.minY) / before.height, (anchor.y - after.minY) / after.height, accuracy: 0.001)
-        }
-    }
-
-    func testZoomLimitsAndReturningToFitClearsPan() {
-        let size = CGSize(width: 1000, height: 1000)
-        XCTAssertEqual(ImageViewport(zoom: .infinity, pan: CGPoint(x: CGFloat.nan, y: CGFloat.infinity)), .identity)
-        XCTAssertEqual(ImageViewport(zoom: 999).zoom, 8)
-        XCTAssertEqual(ImageViewport(zoom: 0).zoom, 1)
-        let zoomed = ImageViewport(zoom: 2, pan: CGPoint(x: 1, y: -1))
-        XCTAssertEqual(zoomed.zoomed(by: 0.1, source: size, destination: size, mode: .fit), .identity)
-        XCTAssertEqual(zoomed.zoomed(by: .nan, source: size, destination: size, mode: .fit), zoomed)
     }
 }

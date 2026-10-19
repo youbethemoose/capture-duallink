@@ -21,7 +21,17 @@ cp "$TASK_ROOT/.build/DualLink.icns" "$TASK_APP/Contents/Resources/DualLink.icns
 # Remove only metadata that codesign disallows; preserve security attributes.
 xattr -dr com.apple.FinderInfo "$TASK_APP" 2>/dev/null || true
 xattr -dr com.apple.ResourceFork "$TASK_APP" 2>/dev/null || true
-# Stable local identity lets Screen Recording permission survive local rebuilds.
-codesign --force --sign - --identifier com.captureduallink.mac -r='designated => identifier "com.captureduallink.mac"' "$TASK_APP"
+# Prefer an Apple Development certificate (free with any Apple ID in Xcode → Settings → Accounts).
+# Its designated requirement is tied to that certificate, so Screen Recording permission survives
+# rebuilds without letting any other program that reuses this identifier inherit it.
+# Override with DUALLINK_SIGN_IDENTITY="<identity>".
+TASK_IDENTITY="${DUALLINK_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development/ { print $2; exit }')}"
+if [[ -n "$TASK_IDENTITY" ]]; then
+    codesign --force --sign "$TASK_IDENTITY" --identifier com.captureduallink.mac "$TASK_APP"
+else
+    print -u2 "warning: no Apple Development certificate found; using an ad-hoc signature."
+    print -u2 "warning: macOS may ask for Screen Recording permission again after each rebuild."
+    codesign --force --sign - --identifier com.captureduallink.mac "$TASK_APP"
+fi
 codesign --verify --strict "$TASK_APP"
 print "Built: $TASK_APP"
