@@ -55,9 +55,11 @@ final class CaptureProbe {
                 try await Task.sleep(for: .milliseconds(350))
                 try await verifyCapture(engine: engine, source: source)
                 if CommandLine.arguments.contains("--check-performance"), failure == nil { await verifyPipeline() }
-                if CommandLine.arguments.contains("--check-fullscreen"), failure == nil {
-                    verifyFullscreen()
-                } else { finish(error: failure) }
+                if CommandLine.arguments.contains("--check-fill-display") ||
+                    CommandLine.arguments.contains("--check-fullscreen"), failure == nil {
+                    verifyFocusAndFillDisplay()
+                }
+                finish(error: failure)
             } catch { finish(error: error.localizedDescription) }
         }
         Task {
@@ -324,45 +326,58 @@ final class CaptureProbe {
             Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
     }
 
-    // MARK: Native fullscreen
+    // MARK: Focus and Fill Display
 
-    private func verifyFullscreen() {
-        guard let viewer = viewers.first, let window = viewer.window else {
-            finish(error: "Missing viewer for fullscreen check"); return
+    /// Copies must never take keyboard focus, so Capture One keeps its shortcuts (⌘K fires the camera).
+    private func verifyFocusAndFillDisplay() {
+        guard let viewer = viewers.first, let window = viewer.window, let screen = window.screen ?? NSScreen.main else {
+            check(false, "Missing viewer for focus and Fill Display checks"); return
         }
+        viewer.showWindow(nil)
         let originalFrame = window.frame
         viewer.options.mode = .fill
         viewer.options.showGrid = true
         window.level = .floating
-        viewer.onFullscreenStateChange = { [weak self, weak viewer] entered in
-            guard let self, let viewer, let window = viewer.window else { return }
-            if entered {
-                self.check(window.styleMask.contains(.fullScreen), "Viewer enters a native fullscreen Space")
-                self.check(NSApp.activationPolicy() == .regular, "Native app menus are available in fullscreen")
-                let presentation = NSApp.currentSystemPresentationOptions
-                self.metadata["systemPresentationOptions"] = "\(presentation.rawValue)"
-                self.check(presentation.contains(.autoHideToolbar), "Native toolbar is configured to reveal on rollover")
-                self.check(viewer.fullscreenPresentationOptions.contains(.autoHideMenuBar),
-                           "Viewer requests native top-edge menu reveal")
-                self.check(viewer.options.mode == .fill && viewer.options.showGrid,
-                           "Fullscreen preserves the copy's fit and grid")
-                let backing = viewer.surface.convertToBacking(viewer.surface.bounds).size
-                self.check(viewer.surface.drawableSize == backing, "Fullscreen renders at the display's backing pixels")
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(500))
-                    viewer.perform(.fullscreen)
+        check(!window.canBecomeKey && !window.canBecomeMain, "Copies can never become the key or main window")
+        check(window.styleMask.contains(.nonactivatingPanel), "Clicking a copy does not activate DualLink")
+
+        // A real click and double-click through AppKit's event dispatch.
+        let keyBefore = NSApp.keyWindow
+        func click(_ count: Int) {
+            let point = NSPoint(x: window.frame.width / 2, y: window.frame.height / 2)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                                  timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil,
+                                                  eventNumber: 0, clickCount: count, pressure: 1) {
+                    window.sendEvent(event)
                 }
-            } else {
-                self.check(!window.styleMask.contains(.fullScreen), "Viewer exits native fullscreen")
-                self.check(abs(window.frame.width - originalFrame.width) < 2 &&
-                           abs(window.frame.height - originalFrame.height) < 2, "Fullscreen restores the original window size")
-                self.check(window.level == .floating, "Fullscreen restores Keep on Top")
-                self.check(window.toolbar?.isVisible == true, "Windowed controls remain available after fullscreen")
-                self.check(NSApp.activationPolicy() == .accessory, "App returns to menu bar utility mode after fullscreen")
-                self.finish(error: self.failure)
             }
         }
-        viewer.perform(.fullscreen)
+        click(1)
+        check(NSApp.keyWindow === keyBefore && NSApp.keyWindow !== window, "Clicking a copy leaves keyboard focus where it was")
+        check(!viewer.overlay.isHidden, "Clicking a copy shows its controls")
+        if let gridButton = viewer.overlay.buttons[.grid] {
+            check(gridButton.acceptsFirstMouse(for: nil), "Overlay controls respond to the first click")
+            gridButton.performClick(nil)
+            check(!viewer.options.showGrid, "Overlay Grid button toggles this copy's grid")
+            gridButton.performClick(nil)
+        }
+
+        click(2)
+        let backing = viewer.surface.convertToBacking(viewer.surface.bounds).size
+        samples["fillDisplayFrame"] = "\(window.frame) on \(screen.frame)"
+        check(viewer.isFillingDisplay && window.frame == screen.frame, "Double-click fills the whole display, menu bar included")
+        check(window.level.rawValue >= NSWindow.Level.statusBar.rawValue, "Fill Display sits above the menu bar")
+        check(NSApp.keyWindow !== window && NSApp.activationPolicy() == .accessory,
+              "Fill Display never brings DualLink to the front")
+        check(viewer.surface.drawableSize == backing, "Fill Display renders at the display's backing pixels")
+        check(viewer.options.mode == .fill && viewer.options.showGrid, "Fill Display preserves the copy's fit and grid")
+        click(2)
+        check(!viewer.isFillingDisplay && window.styleMask.contains(.titled), "Double-click again restores the window")
+        check(abs(window.frame.width - originalFrame.width) < 2 && abs(window.frame.height - originalFrame.height) < 2,
+              "Leaving Fill Display restores the original window size")
+        check(window.level == .floating, "Leaving Fill Display restores Keep on Top")
     }
 
     // MARK: Helpers

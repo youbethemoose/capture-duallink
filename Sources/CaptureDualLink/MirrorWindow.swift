@@ -5,30 +5,7 @@ import CoreImage
 import DualLinkCore
 
 enum ViewerCommand: Int {
-    case fit, fill, grid, trim, resetTrim, keepOnTop, duplicate, fullscreen
-}
-
-/// Accessory apps have no application menu bar. Temporarily become a regular app
-/// while native fullscreen Spaces exist, so the system can reveal our menus.
-@MainActor
-private final class FullscreenMenus {
-    static let shared = FullscreenMenus()
-    private var windows: Set<UUID> = []
-
-    func enter(_ id: UUID) {
-        windows.insert(id)
-        if NSApp.activationPolicy() != .regular {
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate()
-        }
-    }
-
-    func leave(_ id: UUID) {
-        windows.remove(id)
-        if windows.isEmpty, NSApp.activationPolicy() == .regular {
-            NSApp.setActivationPolicy(.accessory)
-        }
-    }
+    case fit, fill, grid, fillDisplay, trim, resetTrim, keepOnTop, duplicate
 }
 
 final class MirrorOptions: ObservableObject {
@@ -41,6 +18,18 @@ final class TrimModel: ObservableObject {
     let appName: String
     @Published var trim: SourceTrim
     init(appName: String, trim: SourceTrim) { self.appName = appName; self.trim = trim }
+}
+
+/// A viewer that can never become the key or main window, so clicking or tapping it never
+/// takes keyboard focus from Capture One: shortcuts such as ⌘K keep reaching Capture One.
+final class ViewerPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+/// Controls inside a window that never becomes key must act on the first click.
+final class FirstMouseButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 /// One shared GPU context for every viewer, with no video encoding or disk writes.
@@ -64,7 +53,9 @@ final class MirrorSurface: MTKView, MTKViewDelegate {
     let options: MirrorOptions
     var frameImage: CIImage?
     var pictureArea: CGRect?
+    var onClick: (() -> Void)?
     var onDoubleClick: (() -> Void)?
+    var onPointerActivity: (() -> Void)?
     var onMenu: (() -> NSMenu)?
     var shouldRender: (() -> Bool)?
     private let inFlight = DispatchSemaphore(value: 2)
@@ -85,6 +76,9 @@ final class MirrorSurface: MTKView, MTKViewDelegate {
         isPaused = true
         enableSetNeedsDisplay = true
         delegate = self
+        // .activeAlways: DualLink is normally not the active app.
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
     }
 
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -182,83 +176,144 @@ final class MirrorSurface: MTKView, MTKViewDelegate {
         drawableSize = convertToBacking(bounds).size
         needsDisplay = true
     }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        if event.clickCount == 2 { onDoubleClick?() }
+        if event.clickCount == 2 { onDoubleClick?() } else { onClick?() }
     }
+    override func mouseMoved(with event: NSEvent) { onPointerActivity?() }
+    override func mouseEntered(with event: NSEvent) { onPointerActivity?() }
     override func menu(for event: NSEvent) -> NSMenu? { onMenu?() }
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53, window?.styleMask.contains(.fullScreen) == true {
-            onDoubleClick?()
-        } else { super.keyDown(with: event) }
-    }
-    override var acceptsFirstResponder: Bool { true }
 }
 
-final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSMenuDelegate, NSMenuItemValidation {
+/// Small controls over the bottom of a copy. They appear on click, tap or hover and hide
+/// again after a few seconds; as an overlay they never change the viewer's drawable size.
+final class ViewerOverlay: NSVisualEffectView {
+    var onCommand: ((ViewerCommand) -> Void)?
+    var onMore: ((NSView) -> Void)?
+    private(set) var buttons: [ViewerCommand: NSButton] = [:]
+    private var more: NSButton!
+
+    init() {
+        super.init(frame: .zero)
+        material = .hudWindow
+        blendingMode = .withinWindow
+        state = .active
+        wantsLayer = true
+        layer?.cornerRadius = 16
+        layer?.masksToBounds = true
+        setAccessibilityLabel("Viewer Controls")
+        setAccessibilityRole(.group)
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        func button(_ title: String, symbol: String?, label: String, action: Selector) -> NSButton {
+            let button = FirstMouseButton(title: title, target: self, action: action)
+            button.bezelStyle = .recessed
+            button.controlSize = .large
+            button.font = .systemFont(ofSize: 13, weight: .semibold)
+            button.contentTintColor = .white
+            button.setAccessibilityLabel(label)
+            button.toolTip = label
+            if let symbol { button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label); button.imagePosition = .imageOnly }
+            button.heightAnchor.constraint(equalToConstant: 40).isActive = true
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+            stack.addArrangedSubview(button)
+            return button
+        }
+        let specifications: [(ViewerCommand, String, String?, String)] = [
+            (.fit, "Fit", nil, "Fit or Fill"),
+            (.grid, "", "grid", "Rule of Thirds Grid"),
+            (.fillDisplay, "", "arrow.up.left.and.arrow.down.right", "Fill Display")
+        ]
+        for (command, title, symbol, label) in specifications {
+            let control = button(title, symbol: symbol, label: label, action: #selector(clicked(_:)))
+            control.tag = command.rawValue
+            buttons[command] = control
+        }
+        more = button("", symbol: "ellipsis", label: "More Options", action: #selector(showMore(_:)))
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    func update(options: MirrorOptions, fillingDisplay: Bool) {
+        buttons[.fit]?.title = options.mode == .fit ? "Fit" : "Fill"
+        buttons[.grid]?.contentTintColor = options.showGrid ? .systemTeal : .white
+        buttons[.fillDisplay]?.image = NSImage(systemSymbolName: fillingDisplay ? "arrow.down.right.and.arrow.up.left"
+                                                                                : "arrow.up.left.and.arrow.down.right",
+                                               accessibilityDescription: fillingDisplay ? "Exit Fill Display" : "Fill Display")
+        buttons[.fillDisplay]?.toolTip = fillingDisplay ? "Exit Fill Display (or double-click)" : "Fill Display (or double-click)"
+    }
+
+    @objc private func clicked(_ sender: NSButton) {
+        guard let command = ViewerCommand(rawValue: sender.tag) else { return }
+        onCommand?(command)
+    }
+    @objc private func showMore(_ sender: NSButton) { onMore?(sender) }
+}
+
+final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenuDelegate {
     let id = UUID()
     let sourceID: CGWindowID
     let options = MirrorOptions()
     let trimModel: TrimModel
     let surface: MirrorSurface
+    let overlay = ViewerOverlay()
     var onClose: ((UUID) -> Void)?
     var onDuplicate: (() -> Void)?
-    var onFullscreenStateChange: ((Bool) -> Void)?
     var onRequestFrame: (() -> CapturedFrame?)?
     var onActivityChange: (() -> Void)?
+    /// Called when the trim panel closes, so focus can go back to the source app.
+    var onTrimFinished: (() -> Void)?
     private let status = NSTextField(wrappingLabelWithString: "Connecting to window…")
     private var trimPanel: NSPanel?
     private var observation: Any?
+    private var screenObserver: NSObjectProtocol?
+    private var trimCloseObserver: NSObjectProtocol?
+    private var hideOverlay: Timer?
     private var hasImage = false
     private var optionsUpdatePending = false
     private(set) var acceptedFrames = 0
     private var closed = false
     private let sequence: Int
-    private var fitControl: NSToolbarItemGroup?
-    private var fullscreenControl: NSToolbarItem?
-    private var gridControl: NSToolbarItem?
-    private var levelBeforeFullscreen: NSWindow.Level?
-    private var transitioningFullscreen = false
-    private(set) var fullscreenPresentationOptions: NSApplication.PresentationOptions = []
+    private var windowed: (frame: NSRect, style: NSWindow.StyleMask, level: NSWindow.Level)?
+    var isFillingDisplay: Bool { windowed != nil }
     var wantsLiveFrames: Bool {
-        !closed && (transitioningFullscreen ||
-            (window?.isVisible == true && window?.isMiniaturized != true && window?.occlusionState.contains(.visible) == true))
+        !closed && window?.isVisible == true && window?.isMiniaturized != true &&
+            window?.occlusionState.contains(.visible) == true
     }
-
-    private static let fitID = NSToolbarItem.Identifier("duallink.fit")
-    private static let trimID = NSToolbarItem.Identifier("duallink.trim")
-    private static let optionsID = NSToolbarItem.Identifier("duallink.options")
-    private static let fullscreenID = NSToolbarItem.Identifier("duallink.fullscreen")
-    private static let gridID = NSToolbarItem.Identifier("duallink.grid")
 
     init(sourceID: CGWindowID, title: String, sequence: Int, engine: RenderEngine, trimModel: TrimModel) {
         self.sourceID = sourceID; self.sequence = sequence; self.trimModel = trimModel
         surface = MirrorSurface(engine: engine, options: options)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                              backing: .buffered, defer: false)
+        let window = ViewerPanel(contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
+                                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .nonactivatingPanel],
+                                 backing: .buffered, defer: false)
         super.init(window: window)
         window.title = "\(title) · Copy \(sequence)"
         window.minSize = NSSize(width: 240, height: 160)
         window.backgroundColor = .black
         window.isReleasedWhenClosed = false
-        window.collectionBehavior = [.fullScreenPrimary, .managed]
+        window.hidesOnDeactivate = false
+        window.isFloatingPanel = false
+        window.collectionBehavior = [.managed, .fullScreenAuxiliary]
         window.tabbingMode = .disallowed
         window.delegate = self
         window.contentView = surface
-        let toolbar = NSToolbar(identifier: "CaptureDualLink.Viewer")
-        toolbar.delegate = self
-        toolbar.displayMode = .iconOnly
-        toolbar.allowsUserCustomization = false
-        window.toolbarStyle = .unifiedCompact
-        window.toolbar = toolbar
-        surface.onDoubleClick = { [weak self] in self?.fullscreen() }
+        surface.onClick = { [weak self] in self?.revealOverlay() }
+        surface.onPointerActivity = { [weak self] in self?.revealOverlay() }
+        surface.onDoubleClick = { [weak self] in self?.toggleFillDisplay() }
         surface.onMenu = { [weak self] in self?.makeMenu() ?? NSMenu() }
-        surface.shouldRender = { [weak self] in
-            guard let self else { return false }
-            return !self.closed && self.window?.isVisible == true && self.window?.isMiniaturized != true &&
-                self.window?.occlusionState.contains(.visible) == true
-        }
+        surface.shouldRender = { [weak self] in self?.wantsLiveFrames ?? false }
         status.font = .systemFont(ofSize: 15, weight: .medium)
         status.textColor = .white
         status.alignment = .center
@@ -267,10 +322,20 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSTool
         status.drawsBackground = true
         status.translatesAutoresizingMaskIntoConstraints = false
         surface.addSubview(status)
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        overlay.isHidden = true
+        overlay.onCommand = { [weak self] in self?.perform($0); self?.revealOverlay() }
+        overlay.onMore = { [weak self] anchor in
+            guard let self else { return }
+            self.makeMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.maxY + 4), in: anchor)
+        }
+        surface.addSubview(overlay)
         NSLayoutConstraint.activate([
             status.centerXAnchor.constraint(equalTo: surface.centerXAnchor),
             status.centerYAnchor.constraint(equalTo: surface.centerYAnchor),
-            status.widthAnchor.constraint(lessThanOrEqualTo: surface.widthAnchor, multiplier: 0.8)
+            status.widthAnchor.constraint(lessThanOrEqualTo: surface.widthAnchor, multiplier: 0.8),
+            overlay.centerXAnchor.constraint(equalTo: surface.centerXAnchor),
+            overlay.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -16)
         ])
         observation = options.objectWillChange.sink { [weak self] in
             guard let self, !self.optionsUpdatePending else { return }
@@ -279,25 +344,31 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSTool
                 self.optionsUpdatePending = false
                 guard !self.closed else { return }
                 self.surface.needsDisplay = true
-                self.updateToolbar()
+                self.updateControls()
             }
+        }
+        screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                                                object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.fitToScreenIfFilling() }
         }
         window.center()
         window.setFrameOrigin(NSPoint(x: window.frame.minX + CGFloat((sequence - 1) % 6) * 24,
                                       y: window.frame.minY - CGFloat((sequence - 1) % 6) * 24))
-        updateToolbar()
+        updateControls()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    deinit {
+        for observer in [screenObserver, trimCloseObserver].compactMap({ $0 }) { NotificationCenter.default.removeObserver(observer) }
+    }
+
     func receive(_ frame: CapturedFrame) {
         guard wantsLiveFrames else { return }
         acceptedFrames += 1
-        let firstFrame = !hasImage
         hasImage = true
         surface.update(frame)
         status.isHidden = true
-        if firstFrame { updateToolbar() }
     }
 
     func showStatus(_ message: String?) {
@@ -305,8 +376,15 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSTool
         status.isHidden = message == nil
     }
 
-    func windowDidChangeScreen(_ notification: Notification) { visibilityChanged() }
-    func windowDidBecomeKey(_ notification: Notification) { window?.makeFirstResponder(surface); visibilityChanged() }
+    private func revealOverlay() {
+        overlay.isHidden = false
+        hideOverlay?.invalidate()
+        hideOverlay = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.overlay.isHidden = true }
+        }
+    }
+
+    func windowDidChangeScreen(_ notification: Notification) { fitToScreenIfFilling(); visibilityChanged() }
     func windowDidChangeOcclusionState(_ notification: Notification) { visibilityChanged() }
     func windowDidMiniaturize(_ notification: Notification) { visibilityChanged() }
     func windowDidDeminiaturize(_ notification: Notification) { visibilityChanged() }
@@ -318,7 +396,6 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSTool
         } else {
             releaseLiveFrame()
         }
-        updateToolbar()
         onActivityChange?()
     }
 
@@ -326,200 +403,108 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSTool
         hasImage = false
         surface.discardLiveFrame()
     }
-    func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions) -> NSApplication.PresentationOptions {
-        var options = proposedOptions
-        options.subtract([.hideDock, .hideMenuBar])
-        options.formUnion([.fullScreen, .autoHideDock, .autoHideMenuBar, .autoHideToolbar])
-        fullscreenPresentationOptions = options
-        return options
-    }
-    func windowWillEnterFullScreen(_ notification: Notification) {
-        transitioningFullscreen = true
-        levelBeforeFullscreen = window?.level
-        window?.level = .normal
-        FullscreenMenus.shared.enter(id)
-    }
-    func windowDidEnterFullScreen(_ notification: Notification) {
-        transitioningFullscreen = false
-        updateToolbar()
-        onFullscreenStateChange?(true)
-    }
-    func windowWillExitFullScreen(_ notification: Notification) { transitioningFullscreen = true }
-    func windowDidExitFullScreen(_ notification: Notification) {
-        transitioningFullscreen = false
-        restoreWindowedState()
-        onFullscreenStateChange?(false)
-    }
-    func windowDidFailToEnterFullScreen(_ window: NSWindow) {
-        transitioningFullscreen = false
-        restoreWindowedState()
-    }
-    func windowDidFailToExitFullScreen(_ window: NSWindow) { transitioningFullscreen = false }
-    private func restoreWindowedState() {
-        if let levelBeforeFullscreen { window?.level = levelBeforeFullscreen }
-        levelBeforeFullscreen = nil
-        FullscreenMenus.shared.leave(id)
-        updateToolbar()
-    }
+
     func windowWillClose(_ notification: Notification) {
         guard !closed else { return }
         closed = true
-        FullscreenMenus.shared.leave(id)
+        hideOverlay?.invalidate()
         trimPanel?.close()
         releaseLiveFrame()
         onClose?(id)
     }
 
-    private func item(_ title: String, _ action: Selector, value: Any? = nil, checked: Bool = false) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+    // MARK: Fill Display
+
+    /// Covers the copy's whole display, menu bar included, without a fullscreen Space.
+    /// Native fullscreen would make DualLink the active app and take Capture One's shortcuts.
+    func toggleFillDisplay() {
+        guard let window else { return }
+        if let windowed {
+            window.styleMask = windowed.style
+            window.level = windowed.level
+            window.hasShadow = true
+            window.setFrame(windowed.frame, display: true)
+            self.windowed = nil
+        } else {
+            guard let screen = window.screen ?? NSScreen.main else { return }
+            windowed = (window.frame, window.styleMask, window.level)
+            window.styleMask = [.borderless, .nonactivatingPanel]
+            window.level = .statusBar
+            window.hasShadow = false
+            window.setFrame(screen.frame, display: true)
+        }
+        surface.needsDisplay = true
+        updateControls()
+    }
+
+    private func fitToScreenIfFilling() {
+        guard isFillingDisplay, let window, let screen = window.screen ?? NSScreen.main,
+              window.frame != screen.frame else { return }
+        window.setFrame(screen.frame, display: true)
+    }
+
+    // MARK: Commands and menus
+
+    private func item(_ title: String, _ action: Selector, value: Any? = nil, checked: Bool = false,
+                      enabled: Bool = true) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: enabled ? action : nil, keyEquivalent: "")
         item.target = self; item.representedObject = value; item.state = checked ? .on : .off
         return item
     }
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        menu.autoenablesItems = false
         for mode in ImageFit.allCases {
             menu.addItem(item(mode.rawValue, #selector(setFit(_:)), value: mode.rawValue, checked: options.mode == mode))
         }
         menu.addItem(item("Rule of Thirds Grid", #selector(toggleGrid), checked: options.showGrid))
+        menu.addItem(item(isFillingDisplay ? "Exit Fill Display" : "Fill Display", #selector(fillDisplay)))
         menu.addItem(.separator())
         menu.addItem(item("Trim \(trimModel.appName) Toolbar…", #selector(showTrim)))
-        menu.addItem(item("Reset Trim", #selector(resetTrim)))
+        menu.addItem(item("Reset Trim", #selector(resetTrim), enabled: trimModel.trim != .none))
         menu.addItem(.separator())
         let displays = NSMenu()
         for screen in NSScreen.screens {
-            displays.addItem(item(screen.localizedName, #selector(moveToScreen(_:)), value: screen.displayID))
+            displays.addItem(item(screen.localizedName, #selector(moveToScreen(_:)), value: screen.displayID,
+                                  checked: screen == window?.screen))
         }
         let move = NSMenuItem(title: "Move to Display", action: nil, keyEquivalent: "")
         move.submenu = displays; menu.addItem(move)
-        menu.addItem(item(window?.styleMask.contains(.fullScreen) == true ? "Exit Full Screen" : "Enter Full Screen", #selector(fullscreen)))
-        menu.addItem(item("Keep on Top", #selector(toggleFloating), checked: window?.level == .floating))
+        menu.addItem(item("Keep on Top", #selector(toggleFloating), checked: (windowed?.level ?? window?.level) == .floating,
+                          enabled: !isFillingDisplay))
         menu.addItem(.separator())
-        menu.addItem(item("Create Another Copy", #selector(duplicate)))
+        menu.addItem(item("Create Another Copy", #selector(duplicate), enabled: onDuplicate != nil))
         menu.addItem(item("Close Copy", #selector(closeCopy)))
         return menu
     }
 
     func perform(_ command: ViewerCommand) {
         switch command {
-        case .fit: options.mode = .fit
+        case .fit: options.mode = options.mode == .fit ? .fill : .fit // The overlay's Fit button toggles.
         case .fill: options.mode = .fill
         case .grid: toggleGrid()
+        case .fillDisplay: toggleFillDisplay()
         case .trim: showTrim()
         case .resetTrim: resetTrim()
         case .keepOnTop: toggleFloating()
         case .duplicate: duplicate()
-        case .fullscreen: fullscreen()
         }
     }
 
-    func validate(_ item: NSMenuItem, command: ViewerCommand) -> Bool {
-        item.state = .off
-        switch command {
-        case .fit: item.state = options.mode == .fit ? .on : .off
-        case .fill: item.state = options.mode == .fill ? .on : .off
-        case .grid: item.state = options.showGrid ? .on : .off
-        case .trim:
-            item.title = "Trim \(trimModel.appName) Toolbar…"
-        case .resetTrim: return trimModel.trim != .none
-        case .keepOnTop:
-            item.state = window?.level == .floating ? .on : .off
-            return window?.styleMask.contains(.fullScreen) != true
-        case .duplicate: return onDuplicate != nil
-        case .fullscreen:
-            item.title = window?.styleMask.contains(.fullScreen) == true ? "Exit Full Screen" : "Enter Full Screen"
-            return !transitioningFullscreen
-        }
-        return true
-    }
-
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.fitID, .flexibleSpace, Self.gridID, Self.trimID, Self.optionsID, Self.fullscreenID]
-    }
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar)
-    }
-    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
-                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        if identifier == Self.fitID {
-            let group = NSToolbarItemGroup(itemIdentifier: identifier, titles: ["Fit", "Fill"],
-                                          selectionMode: .selectOne, labels: nil, target: self,
-                                          action: #selector(changeToolbarFit(_:)))
-            group.label = "Image Fit"
-            group.toolTip = "Fit: entire image · Fill: crop to window (⌘1 / ⌘2)"
-            group.selectedIndex = ImageFit.allCases.firstIndex(of: options.mode) ?? 0
-            fitControl = group
-            return group
-        }
-        if identifier == Self.optionsID {
-            let control = NSMenuToolbarItem(itemIdentifier: identifier)
-            control.label = "Viewer Options"
-            control.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "Viewer Options")
-            control.menu = makeMenu()
-            control.menu.delegate = self
-            return control
-        }
-        let item = NSToolbarItem(itemIdentifier: identifier)
-        item.target = self
-        item.autovalidates = false
-        switch identifier {
-        case Self.gridID:
-            gridControl = item
-            item.label = "Rule of Thirds Grid"; item.toolTip = "Toggle grid for this copy (⌘G)"
-            item.image = NSImage(systemSymbolName: "grid", accessibilityDescription: "Rule of Thirds Grid")
-            item.action = #selector(toggleGrid)
-        case Self.trimID:
-            item.label = "Trim Toolbar"; item.toolTip = "Trim the source app's toolbar from every copy (⌘K)"
-            item.image = NSImage(systemSymbolName: "crop", accessibilityDescription: "Trim Toolbar")
-            item.action = #selector(showTrim)
-        case Self.fullscreenID:
-            fullscreenControl = item
-            item.label = "Full Screen"; item.toolTip = "Enter Full Screen (⌃⌘F); Escape to exit"
-            item.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "Full Screen")
-            item.action = #selector(fullscreen)
-        default: return nil
-        }
-        return item
-    }
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        let fresh = makeMenu()
-        for item in fresh.items { fresh.removeItem(item); menu.addItem(item) }
-    }
-    func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        switch item.action {
-        case #selector(resetTrim): return trimModel.trim != .none
-        case #selector(fullscreen): return !transitioningFullscreen
-        case #selector(toggleFloating): return window?.styleMask.contains(.fullScreen) != true
-        case #selector(duplicate): return onDuplicate != nil
-        default: return true
-        }
-    }
-    private func updateToolbar() {
-        fitControl?.selectedIndex = ImageFit.allCases.firstIndex(of: options.mode) ?? 0
-        gridControl?.image = NSImage(systemSymbolName: options.showGrid ? "grid.circle.fill" : "grid",
-                                     accessibilityDescription: options.showGrid ? "Hide Grid" : "Show Grid")
-        gridControl?.toolTip = options.showGrid ? "Hide grid for this copy (⌘G)" : "Show grid for this copy (⌘G)"
-        let full = window?.styleMask.contains(.fullScreen) == true
-        fullscreenControl?.image = NSImage(systemSymbolName: full ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                                          accessibilityDescription: full ? "Exit Full Screen" : "Enter Full Screen")
-        fullscreenControl?.toolTip = full ? "Exit Full Screen (Escape or ⌃⌘F)" : "Enter Full Screen (⌃⌘F)"
-        fullscreenControl?.isEnabled = !transitioningFullscreen
-    }
-    @objc private func changeToolbarFit(_ sender: NSToolbarItemGroup) {
-        guard ImageFit.allCases.indices.contains(sender.selectedIndex) else { return }
-        options.mode = ImageFit.allCases[sender.selectedIndex]
+    private func updateControls() {
+        overlay.update(options: options, fillingDisplay: isFillingDisplay)
     }
     @objc private func setFit(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let mode = ImageFit(rawValue: raw) else { return }
         options.mode = mode
     }
     @objc private func toggleGrid() { options.showGrid.toggle() }
-    @objc private func fullscreen() {
-        guard !transitioningFullscreen else { return }
-        window?.toggleFullScreen(nil)
+    @objc private func fillDisplay() { toggleFillDisplay() }
+    @objc private func toggleFloating() {
+        guard !isFillingDisplay else { return }
+        window?.level = window?.level == .floating ? .normal : .floating
     }
-    @objc private func toggleFloating() { window?.level = window?.level == .floating ? .normal : .floating }
     @objc private func duplicate() { onDuplicate?() }
     @objc private func closeCopy() { window?.close() }
     @objc private func resetTrim() { trimModel.trim = .none }
@@ -527,19 +512,28 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSTool
         // Match by display ID: the screen list may have changed since the menu opened.
         guard let id = sender.representedObject as? CGDirectDisplayID,
               let screen = NSScreen.screens.first(where: { $0.displayID == id }), let window else { return }
-        window.setFrame(screen.visibleFrame, display: true, animate: true)
+        window.setFrame(isFillingDisplay ? screen.frame : screen.visibleFrame, display: true, animate: !isFillingDisplay)
     }
+    /// The one place DualLink comes to the front: sliders need a key window.
+    /// Closing the panel hands focus back to the source app.
     @objc private func showTrim() {
-        if let trimPanel { trimPanel.makeKeyAndOrderFront(nil); return }
+        if let trimPanel { NSApp.activate(); trimPanel.makeKeyAndOrderFront(nil); return }
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 360),
                             styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
         panel.title = "Trim \(trimModel.appName)"
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
+        panel.level = .statusBar + 1 // Above a copy that is filling its display.
         panel.collectionBehavior = [.fullScreenAuxiliary]
-        panel.contentView = NSHostingView(rootView: TrimEditor(model: trimModel))
-        window?.addChildWindow(panel, ordered: .above)
-        panel.center(); panel.makeKeyAndOrderFront(nil)
+        panel.contentView = NSHostingView(rootView: TrimEditor(model: trimModel, onDone: { [weak panel] in panel?.close() }))
+        trimCloseObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.onTrimFinished?() }
+        }
+        if let screen = window?.screen {
+            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - 190, y: screen.visibleFrame.midY - 180))
+        } else { panel.center() }
+        NSApp.activate()
+        panel.makeKeyAndOrderFront(nil)
         trimPanel = panel
     }
 }
@@ -552,6 +546,7 @@ extension NSScreen {
 
 private struct TrimEditor: View {
     @ObservedObject var model: TrimModel
+    var onDone: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Trim \(model.appName)'s toolbar").font(.headline)
@@ -567,7 +562,11 @@ private struct TrimEditor: View {
                         .monospacedDigit().frame(width: 48, alignment: .trailing)
                 }
             }
-            Button("Reset Trim") { model.trim = .none }
+            HStack {
+                Button("Reset Trim") { model.trim = .none }
+                Spacer()
+                Button("Done", action: onDone).keyboardShortcut(.defaultAction)
+            }
         }
         .padding(22).frame(width: 380, height: 360)
     }

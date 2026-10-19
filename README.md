@@ -9,10 +9,14 @@ Open `dist/Capture DualLink.app`. The overlapping-rectangles icon appears in the
 1. Click **Allow Window Capture** and enable **Capture DualLink** under System Settings → Privacy & Security → Screen & System Audio Recording. Follow any macOS request to quit and reopen, then click **Refresh**.
 2. Open **Window → Live View** in Capture One.
 3. In DualLink, select **Live View** and click **Duplicate Window**. Capture One windows are sorted first.
-4. Drag the copy onto an iPad or another display. **Create Another Copy** (⌘D) makes more; every copy of a source shares one capture stream.
-5. Click **Trim Toolbar** (⌘K) once and trim Capture One's toolbar and any fixed panels from the edges.
+4. Drag the copy onto an iPad or another display. **Create Another Copy** in its right-click menu makes more; every copy of a source shares one capture stream.
+5. Right-click a copy, choose **Trim Capture One Toolbar…** once, and trim the toolbar and any fixed panels from the edges.
 
 Each iPad must be connected as an **extended display**.
+
+## Capture One keeps the keyboard
+
+Copies never take keyboard focus. Clicking, tapping or double-clicking a copy, or using its controls, leaves Capture One as the front app, so ⌘K and every other Capture One shortcut keep working. DualLink has no keyboard shortcuts of its own for the same reason. There are only two moments when DualLink comes to the front: while you pick a window to duplicate, and while the trim panel is open. In both cases it hands focus straight back to Capture One when you finish.
 
 ## Trim, picture detection and the grid
 
@@ -20,12 +24,14 @@ The trim removes fixed controls around Live View, measured in the source window'
 
 Inside the trimmed area, DualLink finds the camera picture automatically. Capture One draws Live View on a perfectly flat background, while a camera feed always has noise and compression texture, even on a gray seamless backdrop. An edge row or column that is (within ±2 levels) a single color is treated as background. Detection runs about once a second and whenever the source changes size, and a new picture area must be seen twice in a row before the grid moves. When an edge is ambiguous, DualLink leaves background visible rather than cutting into the picture.
 
-**Rule of Thirds Grid** (⌘G) divides the detected camera picture, not the whole window, and stays out of the gray bars. It is independent for each copy. Before a picture is detected, it falls back to the whole trimmed area.
+**Rule of Thirds Grid** divides the detected camera picture, not the whole window, and stays out of the gray bars. It is independent for each copy. Before a picture is detected, it falls back to the whole trimmed area.
 
 ## Viewing
 
-- **Fit** (⌘1) shows the whole image with black bars when aspect ratios differ. **Fill** (⌘2) fills the viewer and crops the excess. Both preserve proportions.
-- **Native fullscreen**: the toolbar button, the green window button, double-clicking the image, or ⌃⌘F. Escape exits. Each copy keeps its fit and grid. The app temporarily shows its menus while a fullscreen copy exists.
+Click, tap or hover over a copy to show its controls for a few seconds: **Fit/Fill**, **Grid**, **Fill Display**, and **⋯** for everything else. The same options are in the right-click menu.
+
+- **Fit** shows the whole image with black bars when aspect ratios differ. **Fill** fills the viewer and crops the excess. Both preserve proportions.
+- **Fill Display**: double-click or double-tap a copy, or use its button, to cover that whole display, menu bar included. Double-click again to return to a window. It isn't macOS fullscreen, which would bring DualLink to the front and take Capture One's shortcuts. There's no separate Space, and Escape doesn't exit because keystrokes stay with Capture One.
 - **Move to Display** and **Keep on Top** are in the right-click menu.
 
 Copies render with Metal at each window's actual backing-pixel size, so moving one between Retina, non-Retina and Sidecar displays adapts automatically. Capture and rendering use Display P3, so Capture One's wide-gamut Live View colors aren't clipped to sRGB. DualLink copies the pixels Capture One renders. It doesn't add camera detail, operate the camera, or forward clicks to Capture One. Use Capture One's own viewer on a calibrated display for critical color evaluation.
@@ -54,7 +60,7 @@ Unit tests cover Retina pixel sizing, Mac-to-iPad aspect differences, Fit/Fill, 
 The integration self-test captures only a calibration window owned by DualLink. The window is drawn like Capture One's Live View, with a busy toolbar, a flat gray background and a noisy 4:3 picture. The test verifies trim, picture detection and grid placement through real ScreenCaptureKit and the GPU pipeline:
 
 ```sh
-'dist/Capture DualLink.app/Contents/MacOS/CaptureDualLink' --self-test "$PWD/.build/verification" --check-performance --check-fullscreen
+'dist/Capture DualLink.app/Contents/MacOS/CaptureDualLink' --self-test "$PWD/.build/verification" --check-performance --check-fill-display
 ```
 
-Read `.build/verification/capture-test.json` after it exits; it needs macOS 14.4 or later. `--check-performance` runs the production model with three live viewers, then simulated sleep/wake and minimize/restore. `--check-fullscreen` exercises native fullscreen entry and exit. These are synthetic local workloads, not a Capture One, camera or physical Sidecar benchmark. Check a real Capture One session with each iPad before relying on it in a shoot.
+Read `.build/verification/capture-test.json` after it exits; it needs macOS 14.4 or later. `--check-performance` runs the production model with three live viewers, then simulated sleep/wake and minimize/restore. `--check-fill-display` checks that copies can't take focus (including a click sent through AppKit's event dispatch) and exercises Fill Display. These are synthetic local workloads, not a Capture One, camera or physical Sidecar benchmark. Check a real Capture One session with each iPad before relying on it in a shoot.

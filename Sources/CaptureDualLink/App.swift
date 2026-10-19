@@ -16,7 +16,7 @@ enum CaptureDualLinkApp {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var picker: NSPanel?
     private var model: AppModel?
@@ -33,6 +33,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         self.model = model
         model.onCountChange = { [weak self] in self?.updateStatus() }
         model.onShowPicker = { [weak self] in self?.showPicker() }
+        model.onDuplicated = { [weak self] pid in
+            self?.picker?.orderOut(nil)
+            AppModel.returnFocus(to: pid)
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "Capture DualLink")
         statusItem.button?.image?.isTemplate = true
@@ -56,33 +60,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Capture DualLink", action: #selector(quitApp), keyEquivalent: "q").target = self
         appItem.submenu = appMenu; main.addItem(appItem)
-        let viewItem = NSMenuItem()
-        let viewMenu = NSMenu(title: "View")
-        func add(_ title: String, _ command: ViewerCommand, _ key: String = "",
-                 _ modifiers: NSEvent.ModifierFlags = .command) {
-            let item = NSMenuItem(title: title, action: #selector(viewerCommand(_:)), keyEquivalent: key)
-            item.keyEquivalentModifierMask = modifiers
-            item.target = self; item.tag = command.rawValue
-            if command == .fullscreen {
-                // Use the standard responder action so AppKit does not insert a
-                // second automatic Enter/Exit Full Screen menu item.
-                item.action = #selector(NSWindow.toggleFullScreen(_:))
-                item.target = nil
-            }
-            viewMenu.addItem(item)
-        }
-        add("Fit — Show Entire Image", .fit, "1")
-        add("Fill — Crop to Window", .fill, "2")
-        add("Rule of Thirds Grid", .grid, "g")
-        viewMenu.addItem(.separator())
-        add("Trim Toolbar…", .trim, "k")
-        add("Reset Trim", .resetTrim, "r", [.command, .shift])
-        viewMenu.addItem(.separator())
-        add("Keep on Top", .keepOnTop)
-        add("Create Another Copy", .duplicate, "d")
-        viewMenu.addItem(.separator())
-        add("Enter Full Screen", .fullscreen, "f", [.command, .control])
-        viewItem.submenu = viewMenu; main.addItem(viewItem)
         let windowItem = NSMenuItem()
         let windows = NSMenu(title: "Window")
         windows.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
@@ -90,21 +67,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         windowItem.submenu = windows; main.addItem(windowItem)
         NSApp.mainMenu = main
         NSApp.windowsMenu = windows
-    }
-
-    private var activeMirror: MirrorWindowController? {
-        (NSApp.keyWindow?.windowController as? MirrorWindowController) ??
-        (NSApp.keyWindow?.parent?.windowController as? MirrorWindowController)
-    }
-    @objc private func viewerCommand(_ sender: NSMenuItem) {
-        guard let command = ViewerCommand(rawValue: sender.tag) else { return }
-        activeMirror?.perform(command)
-    }
-    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        guard menuItem.action == #selector(viewerCommand(_:)),
-              let command = ViewerCommand(rawValue: menuItem.tag) else { return true }
-        guard let mirror = activeMirror else { return false }
-        return mirror.validate(menuItem, command: command)
     }
 
     private func updateStatus() {
@@ -162,8 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @objc private func revealCopy(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? UUID, let mirror = model?.mirrors[id] else { return }
-        mirror.window?.deminiaturize(nil); mirror.showWindow(nil)
-        NSApp.activate()
+        mirror.window?.deminiaturize(nil); mirror.window?.orderFrontRegardless()
     }
     @objc private func permissionSettings() { model?.openPermissionSettings() }
     @objc private func closeCopies() { model?.closeAll() }

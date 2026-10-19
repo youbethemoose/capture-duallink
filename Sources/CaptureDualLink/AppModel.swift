@@ -22,6 +22,8 @@ final class AppModel: ObservableObject {
     }
     var onCountChange: (() -> Void)?
     var onShowPicker: (() -> Void)?
+    /// A copy is ready; the delegate hides the picker and returns focus to the source app.
+    var onDuplicated: ((pid_t?) -> Void)?
     private(set) var sessions: [CGWindowID: CaptureSession] = [:]
     private(set) var mirrors: [UUID: MirrorWindowController] = [:]
     private var trims: [CGWindowID: TrimModel] = [:]
@@ -150,6 +152,7 @@ final class AppModel: ObservableObject {
             let mirror = makeMirror(sourceID: source.id, title: source.label)
             if let frame = existing.latestFrame { mirror?.receive(frame) }
             startPollingIfNeeded(); scheduleActivityRefresh()
+            onDuplicated?(existing.sourceProcessID)
             return
         }
         let trimModel = TrimModel(appName: source.app, trim: savedTrim(for: source.settingsKey))
@@ -192,6 +195,7 @@ final class AppModel: ObservableObject {
             guard sessions[source.id] === session, !shuttingDown else { await session.stop(); return }
             message = nil
             startPollingIfNeeded()
+            onDuplicated?(session.sourceProcessID)
         } catch {
             sessions.removeValue(forKey: source.id)
             await session.stop()
@@ -220,16 +224,25 @@ final class AppModel: ObservableObject {
         mirror.onRequestFrame = { [weak self] in self?.sessions[sourceID]?.latestFrame }
         mirror.onActivityChange = { [weak self] in self?.scheduleActivityRefresh() }
         mirror.onClose = { [weak self] id in self?.removeMirror(id) }
+        mirror.onTrimFinished = { [weak self] in
+            AppModel.returnFocus(to: self?.sessions[sourceID]?.sourceProcessID)
+        }
         mirror.onDuplicate = { [weak self] in
             guard let self, let session = self.sessions[sourceID] else { return }
             let extra = self.makeMirror(sourceID: sourceID, title: session.label)
             if let frame = session.latestFrame { extra?.receive(frame) }
         }
         mirrors[mirror.id] = mirror
-        mirror.showWindow(nil)
-        NSApp.activate()
+        // Show without activating: copies never take focus from the source app.
+        mirror.window?.orderFrontRegardless()
         updateCount()
         return mirror
+    }
+
+    /// Gives keyboard focus back to the source app (Capture One) so its shortcuts keep working.
+    static func returnFocus(to pid: pid_t?) {
+        guard let pid, let app = NSRunningApplication(processIdentifier: pid) else { return }
+        app.activate()
     }
 
     private func removeMirror(_ id: UUID) {
