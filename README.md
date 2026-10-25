@@ -4,7 +4,7 @@ A small native macOS menu bar app that duplicates a selected window into indepen
 
 ## Open the app
 
-Open `dist/Capture DualLink.app`. The overlapping-rectangles icon appears in the menu bar; the app has no Dock icon. For everyday use, quit the app and run `./scripts/install-app.sh` to copy it to your user Applications folder.
+Open `dist/Capture DualLink.app`. The linked **DL** icon appears in the menu bar; the app has no Dock icon. For everyday use, quit the app and run `./scripts/install-app.sh` to copy it to your user Applications folder.
 
 1. Click **Allow Window Capture** and enable **Capture DualLink** under System Settings → Privacy & Security → Screen & System Audio Recording. Follow any macOS request to quit and reopen, then click **Refresh**.
 2. Open **Window → Live View** in Capture One.
@@ -14,9 +14,17 @@ Open `dist/Capture DualLink.app`. The overlapping-rectangles icon appears in the
 
 Each iPad must be connected as an **extended display**.
 
+## Automatic startup away from home
+
+Right-click the **DL** menu bar icon and choose **Automatic Startup…**. Enter your home Wi-Fi name, turn on **Start automatically away from home Wi-Fi**, and save. Allow the macOS Location Services prompt so DualLink can read the connected network name; approve its Login Item if macOS requests it.
+
+A lightweight menu bar watcher starts at login and stays quiet at home. After another Wi-Fi network is connected for at least 10 seconds, it opens the window picker once for that away visit. Disconnected Wi-Fi and unavailable network names never count as away. Network change events drive detection, with a one-minute recovery check. The home Wi-Fi name stays in this Mac's local preferences, with no GPS updates or nearby-network scans.
+
+Capture doesn't start until you choose a source window. Returning home leaves active viewers open. **Quit Capture DualLink** stops the watcher until you reopen the app or log in again. Disable automatic startup in the same panel to remove the Login Item. Manual launches always open normally, including at home.
+
 ## Capture One keeps the keyboard
 
-Copies never take keyboard focus. Clicking, tapping or double-clicking a copy, or using its controls, leaves Capture One as the front app, so ⌘K and every other Capture One shortcut keep working. DualLink has no keyboard shortcuts of its own for the same reason. There are only two moments when DualLink comes to the front: while you pick a window to duplicate, and while the trim panel is open. In both cases it hands focus straight back to Capture One when you finish.
+Copies never take keyboard focus. Clicking, tapping or double-clicking a copy, or using its controls, leaves Capture One as the front app, so ⌘K and every other Capture One shortcut keep working. DualLink has no viewer keyboard shortcuts of its own for the same reason. The window picker, trim panel and automatic startup settings can bring DualLink to the front. Duplicating a window or finishing a trim hands focus back to the source app.
 
 ## Trim, picture detection and the grid
 
@@ -56,6 +64,8 @@ Requires macOS 14 or later and Swift 5.9 or later. Building needs only the Comma
 `build-app.sh` signs with your **Apple Development** certificate when one is installed (free with any Apple ID: Xcode → Settings → Accounts). That keeps Screen Recording permission across rebuilds without letting other programs that reuse the bundle identifier inherit it. Without a certificate it falls back to an ad-hoc signature, and macOS may ask for permission again after rebuilding. Set `DUALLINK_SIGN_IDENTITY` to choose a specific identity.
 
 Unit tests cover Retina pixel sizing, Mac-to-iPad aspect differences, Fit/Fill, trim conversion and bounds, picture detection (pillarbox, letterbox, near-background gray backdrops, flat picture areas, ±1 color-conversion dither, leftover toolbar lines, overlays in the bars, empty viewers) and detection smoothing.
+
+Automatic startup tests cover the 10-second confirmation, Wi-Fi dropouts, unknown or redacted network names, exact SSID matching, multiple interfaces, returning home and opening once per away visit. These are deterministic policy tests; they do not switch the Mac's real Wi-Fi network or log the user out.
 
 The integration self-test captures only a calibration window owned by DualLink. The window is drawn like Capture One's Live View, with a busy toolbar, a flat gray background and a noisy 4:3 picture. The test verifies trim, picture detection and grid placement through real ScreenCaptureKit and the GPU pipeline:
 

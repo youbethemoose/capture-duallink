@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import CoreServices
 
 @main
 enum CaptureDualLinkApp {
@@ -21,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var picker: NSPanel?
     private var model: AppModel?
     private var probe: CaptureProbe?
+    private var startup: HomeWiFiController?
+    private var startupPanel: NSPanel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let index = CommandLine.arguments.firstIndex(of: "--self-test"),
@@ -29,23 +32,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             probe?.run()
             return
         }
-        let model = AppModel()
-        self.model = model
-        model.onCountChange = { [weak self] in self?.updateStatus() }
-        model.onShowPicker = { [weak self] in self?.showPicker() }
-        model.onDuplicated = { [weak self] pid in
-            self?.picker?.orderOut(nil)
-            AppModel.returnFocus(to: pid)
-        }
+        let startup = HomeWiFiController()
+        self.startup = startup
+        startup.onAway = { [weak self] in self?.showPicker() }
+        startup.onChange = { [weak self] in self?.updateStatus() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "Capture DualLink")
-        statusItem.button?.image?.isTemplate = true
+        statusItem.button?.image = MenuBarIcon.image
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusClicked(_:))
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         updateStatus()
         createMainMenu()
-        showPicker()
+        // A login launch watches quietly at home. Manual launches always open normally.
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        let loginLaunch = event?.eventID == kAEOpenApplication &&
+            event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+        if !startup.enabled || !loginLaunch { showPicker() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -57,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Capture DualLink…", action: #selector(showPicker), keyEquivalent: ",").target = self
+        appMenu.addItem(withTitle: "Automatic Startup…", action: #selector(showAutomaticStartup), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Capture DualLink", action: #selector(quitApp), keyEquivalent: "q").target = self
         appItem.submenu = appMenu; main.addItem(appItem)
@@ -72,17 +75,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func updateStatus() {
         let count = model?.mirrorCount ?? 0
         statusItem?.button?.title = count > 0 ? " \(count)" : ""
-        statusItem?.button?.toolTip = "Capture DualLink · \(count) active copies\nClick to choose a window. Right-click for actions."
+        let automation = startup?.enabled == true ? "\n\(startup?.status ?? "")" : ""
+        statusItem?.button?.toolTip = "Capture DualLink · \(count) active copies\nClick to choose a window. Right-click for actions.\(automation)"
     }
 
     @objc private func statusClicked(_ sender: Any?) {
-        guard let model else { return }
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
             let title = NSMenuItem(title: "Capture DualLink", action: nil, keyEquivalent: "")
             title.isEnabled = false; menu.addItem(title)
             menu.addItem(withTitle: "Duplicate a Window…", action: #selector(showPicker), keyEquivalent: "").target = self
-            if !model.mirrors.isEmpty {
+            let autoStart = NSMenuItem(title: "Automatic Startup…", action: #selector(showAutomaticStartup), keyEquivalent: "")
+            autoStart.target = self; autoStart.state = startup?.enabled == true ? .on : .off
+            menu.addItem(autoStart)
+            if let model, !model.mirrors.isEmpty {
                 menu.addItem(.separator())
                 for mirror in model.mirrors.values.sorted(by: { ($0.window?.title ?? "") < ($1.window?.title ?? "") }) {
                     let item = NSMenuItem(title: mirror.window?.title ?? "Copy", action: #selector(revealCopy(_:)), keyEquivalent: "")
@@ -102,7 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func showPicker() {
-        guard let model else { return } // Self-test runs have no picker.
+        guard probe == nil else { return }
+        let model = ensureModel()
         if picker == nil {
             let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 470, height: 500),
                                 styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
@@ -122,12 +129,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { await model.refreshSources() }
     }
 
+    /// Avoid allocating Metal or enumerating windows for the idle login watcher.
+    private func ensureModel() -> AppModel {
+        if let model { return model }
+        let model = AppModel()
+        self.model = model
+        model.onCountChange = { [weak self] in self?.updateStatus() }
+        model.onShowPicker = { [weak self] in self?.showPicker() }
+        model.onDuplicated = { [weak self] pid in
+            self?.picker?.orderOut(nil)
+            AppModel.returnFocus(to: pid)
+        }
+        return model
+    }
+
+    @objc private func showAutomaticStartup() {
+        guard let startup else { return }
+        if startupPanel == nil {
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 450, height: 460),
+                                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            panel.title = "Automatic Startup"
+            panel.isReleasedWhenClosed = false
+            panel.hidesOnDeactivate = false
+            panel.contentView = NSHostingView(rootView: AutoStartView(startup: startup))
+            panel.center()
+            startupPanel = panel
+        }
+        startupPanel?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+    }
+
     @objc private func revealCopy(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? UUID, let mirror = model?.mirrors[id] else { return }
         mirror.window?.deminiaturize(nil); mirror.window?.orderFrontRegardless()
     }
-    @objc private func permissionSettings() { model?.openPermissionSettings() }
+    @objc private func permissionSettings() { ensureModel().openPermissionSettings() }
     @objc private func closeCopies() { model?.closeAll() }
     @objc private func quitApp() { model?.closeAll(); NSApp.terminate(nil) }
-    func applicationWillTerminate(_ notification: Notification) { model?.shutdown() }
+    func applicationWillTerminate(_ notification: Notification) { startup?.shutdown(); model?.shutdown() }
 }

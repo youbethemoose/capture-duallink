@@ -8,8 +8,10 @@ struct PickerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                Image(systemName: "rectangle.on.rectangle")
-                    .font(.system(size: 25, weight: .medium))
+                Image(nsImage: MenuBarIcon.image)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 30, height: 25)
                     .foregroundStyle(.mint)
                     .frame(width: 48, height: 48)
                     .background(.mint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))

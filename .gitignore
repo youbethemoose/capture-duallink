@@ -2,3 +2,9 @@
 dist/
 .DS_Store
 *.xcuserstate
+
+# Local update checkout and rollback copies
+.updates/
+Backups/
+DualLink-Update-Receipt.json
+DualLink-Claude-Review.md
