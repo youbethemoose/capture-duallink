@@ -4,7 +4,7 @@ A small native macOS menu bar app that duplicates a selected window into indepen
 
 ## Open the app
 
-Open `dist/Capture DualLink.app`. The linked **DL** icon appears in the menu bar; the app has no Dock icon. For everyday use, quit the app and run `./scripts/install-app.sh` to copy it to your user Applications folder.
+Open `dist/Capture DualLink.app`. The **linked shutter** icon appears in the menu bar; the app has no Dock icon. For everyday use, quit the app and run `./scripts/install-app.sh` to copy it to your user Applications folder.
 
 1. Click **Allow Window Capture** and enable **Capture DualLink** under System Settings → Privacy & Security → Screen & System Audio Recording. Follow any macOS request to quit and reopen, then click **Refresh**.
 2. Open **Window → Live View** in Capture One.
@@ -16,7 +16,7 @@ Each iPad must be connected as an **extended display**.
 
 ## Automatic startup away from home
 
-Right-click the **DL** menu bar icon and choose **Automatic Startup…**. Enter your home Wi-Fi name, turn on **Start automatically away from home Wi-Fi**, and save. Allow the macOS Location Services prompt so DualLink can read the connected network name; approve its Login Item if macOS requests it.
+Right-click the **DualLink** menu bar icon and choose **Automatic Startup…**. Enter your home Wi-Fi name, turn on **Start automatically away from home Wi-Fi**, and save. Allow the macOS Location Services prompt so DualLink can read the connected network name; approve its Login Item if macOS requests it.
 
 A lightweight menu bar watcher starts at login and stays quiet at home. After another Wi-Fi network is connected for at least 10 seconds, it opens the window picker once for that away visit. Disconnected Wi-Fi and unavailable network names never count as away. Network change events drive detection, with a one-minute recovery check. The home Wi-Fi name stays in this Mac's local preferences, with no GPS updates or nearby-network scans.
 
