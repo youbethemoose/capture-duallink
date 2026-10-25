@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var probe: CaptureProbe?
     private var startup: HomeWiFiController?
     private var startupPanel: NSPanel?
+    private var setupPanel: NSPanel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let index = CommandLine.arguments.firstIndex(of: "--self-test"),
@@ -54,11 +55,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showPicker(); return true
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if setupPanel?.isVisible == true { Task { await model?.refreshSources() } }
+    }
+
     private func createMainMenu() {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Capture DualLink…", action: #selector(showPicker), keyEquivalent: ",").target = self
+        appMenu.addItem(withTitle: "Setup Guide…", action: #selector(showSetupGuide), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Automatic Startup…", action: #selector(showAutomaticStartup), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Capture DualLink", action: #selector(quitApp), keyEquivalent: "q").target = self
@@ -85,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let title = NSMenuItem(title: "Capture DualLink", action: nil, keyEquivalent: "")
             title.isEnabled = false; menu.addItem(title)
             menu.addItem(withTitle: "Duplicate a Window…", action: #selector(showPicker), keyEquivalent: "").target = self
+            menu.addItem(withTitle: "Setup Guide…", action: #selector(showSetupGuide), keyEquivalent: "").target = self
             let autoStart = NSMenuItem(title: "Automatic Startup…", action: #selector(showAutomaticStartup), keyEquivalent: "")
             autoStart.target = self; autoStart.state = startup?.enabled == true ? .on : .off
             menu.addItem(autoStart)
@@ -109,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func showPicker() {
         guard probe == nil else { return }
+        guard UserDefaults.standard.bool(forKey: "hasCompletedSetupGuide") else { showSetupGuide(); return }
         let model = ensureModel()
         if picker == nil {
             let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 470, height: 500),
@@ -120,11 +128,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             panel.hidesOnDeactivate = false
             panel.collectionBehavior = [.fullScreenAuxiliary]
             panel.isMovableByWindowBackground = true
-            panel.contentView = NSHostingView(rootView: PickerView(model: model, onHide: { [weak panel] in panel?.orderOut(nil) }))
+            panel.contentView = NSHostingView(rootView: PickerView(model: model, onShowGuide: { [weak self] in self?.showSetupGuide() }))
             panel.center()
             picker = panel
         }
         picker?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        Task { await model.refreshSources() }
+    }
+
+    @objc private func showSetupGuide() {
+        guard probe == nil else { return }
+        let model = ensureModel()
+        if setupPanel == nil {
+            let height = min(740, (NSScreen.main?.visibleFrame.height ?? 820) - 64)
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 820, height: height),
+                                styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            panel.title = "Welcome to Capture DualLink"
+            panel.isReleasedWhenClosed = false
+            panel.hidesOnDeactivate = false
+            panel.minSize = NSSize(width: 780, height: 590)
+            panel.contentView = NSHostingView(rootView: SetupGuideView(model: model, onContinue: { [weak self] in
+                UserDefaults.standard.set(true, forKey: "hasCompletedSetupGuide")
+                self?.setupPanel?.close()
+                self?.showPicker()
+            }))
+            panel.center()
+            setupPanel = panel
+        }
+        setupPanel?.makeKeyAndOrderFront(nil)
         NSApp.activate()
         Task { await model.refreshSources() }
     }

@@ -6,14 +6,26 @@ mkdir -p .build/ModuleCache .build/cache .build/config .build/security
 export CLANG_MODULE_CACHE_PATH="$TASK_ROOT/.build/ModuleCache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$TASK_ROOT/.build/ModuleCache"
 SWIFT_OPTIONS=(--disable-sandbox --build-system native -debug-info-format none --cache-path "$TASK_ROOT/.build/cache" --config-path "$TASK_ROOT/.build/config" --security-path "$TASK_ROOT/.build/security" --scratch-path "$TASK_ROOT/.build" --manifest-cache local -Xswiftc -module-cache-path -Xswiftc "$TASK_ROOT/.build/ModuleCache")
-swift build "${SWIFT_OPTIONS[@]}" --configuration release
-TASK_BIN_DIR=$(swift build "${SWIFT_OPTIONS[@]}" --configuration release --show-bin-path)
+TASK_ARCHITECTURES=("$(uname -m)")
+if [[ "${1:-}" == --universal ]]; then
+    TASK_ARCHITECTURES=(arm64 x86_64)
+elif [[ $# -gt 0 ]]; then
+    print -u2 "Usage: $0 [--universal]"
+    exit 1
+fi
+TASK_BINARIES=()
+for TASK_ARCH in "${TASK_ARCHITECTURES[@]}"; do
+    swift build "${SWIFT_OPTIONS[@]}" --arch "$TASK_ARCH" --configuration release
+    TASK_BIN_DIR=$(swift build "${SWIFT_OPTIONS[@]}" --arch "$TASK_ARCH" --configuration release --show-bin-path)
+    TASK_BINARIES+=("$TASK_BIN_DIR/CaptureDualLink")
+done
 TASK_APP="$TASK_ROOT/dist/Capture DualLink.app"
 mkdir -p "$TASK_APP/Contents/MacOS" "$TASK_APP/Contents/Resources"
-cp "$TASK_BIN_DIR/CaptureDualLink" "$TASK_APP/Contents/MacOS/CaptureDualLink"
+lipo -create "${TASK_BINARIES[@]}" -output "$TASK_APP/Contents/MacOS/CaptureDualLink"
 cp "$TASK_ROOT/Resources/Info.plist" "$TASK_APP/Contents/Info.plist"
-if [[ ! -f "$TASK_ROOT/.build/DualLink.icns" || "$TASK_ROOT/scripts/make-icon.swift" -nt "$TASK_ROOT/.build/DualLink.icns" ]]; then
-    swift "$TASK_ROOT/scripts/make-icon.swift" "$TASK_ROOT/.build/DualLink.iconset"
+if [[ ! -f "$TASK_ROOT/.build/DualLink.icns" || "$TASK_ROOT/scripts/make-icon.swift" -nt "$TASK_ROOT/.build/DualLink.icns" || "$TASK_ROOT/Sources/CaptureDualLink/MenuBarIcon.swift" -nt "$TASK_ROOT/.build/DualLink.icns" ]]; then
+    cat "$TASK_ROOT/Sources/CaptureDualLink/MenuBarIcon.swift" "$TASK_ROOT/scripts/make-icon.swift" > "$TASK_ROOT/.build/make-icon.swift"
+    swift "$TASK_ROOT/.build/make-icon.swift" "$TASK_ROOT/.build/DualLink.iconset"
     iconutil -c icns "$TASK_ROOT/.build/DualLink.iconset" -o "$TASK_ROOT/.build/DualLink.icns"
 fi
 cp "$TASK_ROOT/.build/DualLink.icns" "$TASK_APP/Contents/Resources/DualLink.icns"

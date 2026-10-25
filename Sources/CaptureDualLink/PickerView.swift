@@ -3,7 +3,7 @@ import AppKit
 
 struct PickerView: View {
     @ObservedObject var model: AppModel
-    var onHide: () -> Void
+    var onShowGuide: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -67,6 +67,8 @@ struct PickerView: View {
             }
 
             HStack {
+                Button("Setup Guide", action: onShowGuide)
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
                 Spacer()
                 Button(model.creating ? "Connecting…" : "Duplicate Window") {
                     Task { await model.duplicateSelected() }

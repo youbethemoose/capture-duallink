@@ -4,7 +4,9 @@ A small native macOS menu bar app that duplicates a selected window into indepen
 
 ## Open the app
 
-Open `dist/Capture DualLink.app`. The **linked shutter** icon appears in the menu bar; the app has no Dock icon. For everyday use, quit the app and run `./scripts/install-app.sh` to copy it to your user Applications folder.
+For a shared disk image, drag **Capture DualLink.app** to **Applications**, eject the image, and open the installed app. The illustrated setup guide opens on first use. It shows how the camera, Capture One and independent viewers fit together, then walks through display setup and capture permission. Reopen it from **Setup Guide** in the picker or the shutter icon's right-click menu.
+
+For a local build, open `dist/Capture DualLink.app`. The **linked shutter** icon appears in the menu bar; the app has no Dock icon. For everyday use, quit the app and run `./scripts/install-app.sh` to copy it to your user Applications folder.
 
 1. Click **Allow Window Capture** and enable **Capture DualLink** under System Settings → Privacy & Security → Screen & System Audio Recording. Follow any macOS request to quit and reopen, then click **Refresh**.
 2. Open **Window → Live View** in Capture One.
@@ -60,6 +62,16 @@ Requires macOS 14 or later and Swift 5.9 or later. Building needs only the Comma
 ./scripts/build-app.sh
 ./scripts/test.sh
 ```
+
+To build a shareable disk image for both Apple silicon and Intel Macs:
+
+```sh
+./scripts/package-app.sh
+```
+
+This creates `dist/Capture-DualLink-<version>-universal.dmg` and a SHA-256 checksum. The disk image contains only the universal app, an Applications shortcut and `START HERE.txt`; local preferences, home Wi-Fi names, source code and developer backups are excluded. The first-run guide is part of the app and needs no network connection.
+
+**Distribution status:** the local build uses ad-hoc signing when no signing identity is installed. Such a package is a private test build; Gatekeeper may block its first launch on another Mac. Developer ID signing and Apple notarization are still needed for standard downloaded-app distribution. No quarantine removal or security-setting changes are built into the installer. See [Apple's first-launch guidance](https://support.apple.com/en-us/102445).
 
 `build-app.sh` signs with your **Apple Development** certificate when one is installed (free with any Apple ID: Xcode → Settings → Accounts). That keeps Screen Recording permission across rebuilds without letting other programs that reuse the bundle identifier inherit it. Without a certificate it falls back to an ad-hoc signature, and macOS may ask for permission again after rebuilding. Set `DUALLINK_SIGN_IDENTITY` to choose a specific identity.
 
