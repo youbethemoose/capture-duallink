@@ -119,14 +119,13 @@ struct PickerView: View {
                                 HStack(spacing: 10) {
                                     Image(nsImage: appIcon(source))
                                         .resizable().frame(width: 28, height: 28)
-                                    VStack(alignment: .leading, spacing: 4) {
+                                    VStack(spacing: 4) {
                                         Text(source.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
                                         Text(source.app).font(.system(size: 10)).foregroundStyle(DualLinkStyle.mutedInk)
                                     }
-                                    Spacer()
-                                    if model.selectedID == source.id {
-                                        Image(systemName: "checkmark.circle.fill").foregroundStyle(DualLinkStyle.ink)
-                                    }
+                                    .multilineTextAlignment(.center).frame(maxWidth: .infinity)
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(DualLinkStyle.ink)
+                                        .frame(width: 28).opacity(model.selectedID == source.id ? 1 : 0)
                                 }
                                 .padding(10).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(model.selectedID == source.id ? DualLinkStyle.paper : DualLinkStyle.paper.opacity(0.5),
