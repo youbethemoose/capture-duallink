@@ -215,7 +215,7 @@ struct AutoStartView: View {
     @State private var enabled = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .center, spacing: 16) {
             Text("Start away from home").font(.title2.weight(.semibold))
             Text("DualLink opens after another Wi-Fi network stays connected for 10 seconds. At home, only the idle menu-bar watcher runs; capture starts when you choose a window.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -252,6 +252,9 @@ struct AutoStartView: View {
             }
         }
         .padding(24).frame(width: 450)
+        .background(DualLinkStyle.paper).foregroundStyle(DualLinkStyle.ink)
+        .multilineTextAlignment(.center)
+        .tint(DualLinkStyle.ink).preferredColorScheme(.light)
         .onAppear { home = startup.homeSSID; enabled = startup.enabled }
     }
 }

@@ -1,67 +1,48 @@
 CAPTURE DUALLINK
-One live view. More eyes on set.
+Two views. One composition.
+
+THE IDEA
+Photographer: keep Capture One's original Live View on the laptop. Adjust focus,
+add a grid or overlay, and direct where the product should move.
+Prop stylist: watch the same live frame on the iPad while placing the product.
 
 INSTALL
-Drag Capture DualLink.app onto Applications. Eject this disk image, then open
-Capture DualLink from Applications. Its linked shutter icon lives in the menu bar.
-The illustrated setup guide opens automatically the first time.
+Drag Capture DualLink.app to Applications. Eject the disk image and open the app.
+The Setup Guide opens the first time. Look for the linked shutter in the menu bar.
+Requires macOS 14 or later; supports Apple silicon and Intel Macs.
 
-This package supports Apple silicon and Intel Macs running macOS 14 or later.
-Capture One and a compatible tethered camera are needed for camera Live View.
-
-PRIVATE TEST BUILD
-This build has a local signature and has not been notarized by Apple. macOS may
-block its first launch. Only open a build you received from someone you trust.
-Apple explains its first-launch checks and available options here:
-https://support.apple.com/en-us/102445
-
-SET UP ONCE
-1. Connect the extra display.
-   For iPad, use Sidecar with the same Apple Account on both devices. In System
-   Settings > Displays, choose an extended display rather than screen mirroring.
-   USB keeps the iPad charged. Sidecar connects one iPad; ordinary monitors use
-   the display connections and limits supported by your Mac.
-   Apple's Sidecar guide: https://support.apple.com/en-us/102597
-
-2. Allow window capture.
-   Click Allow Window Capture in DualLink. Enable Capture DualLink in System
-   Settings > Privacy & Security > Screen Recording (called Screen & System
-   Audio Recording on newer systems). Quit and reopen if macOS requests it.
-   This permission lets DualLink copy your selected window; it does not record
-   video or save the feed to disk.
-
-3. Open and duplicate Live View.
-   In Capture One, open Window > Live View. In DualLink, choose the Live View
-   window and click Duplicate Window. Start with Native / Retina and 30 fps.
-   Drag the copy onto the iPad or other display. Capture One keeps its controls
-   and keyboard focus on your shooting Mac.
+SET UP
+1. Connect the iPad with Sidecar, using the same Apple Account on both devices.
+   In System Settings > Displays, choose an extended display, not mirroring.
+2. Open DualLink and allow it in Screen Recording settings. Reopen if asked.
+3. In Capture One, choose Window > Live View. Select it in DualLink and click
+   Duplicate Window. Keep the original on the laptop; move the copy to the iPad.
+   Start with Native / Retina and 30 fps.
 
 ON SET
-- Click or hover over a copy to reveal Fit / Fill and Grid. Each copy has its own
-  settings. Fit shows the whole source; Fill crops to fill the viewer.
-- Double-click a copy to Fill Display; double-click again to return. This keeps
-  Capture One in control, so Escape stays with Capture One and does not exit.
-- Right-click a copy for Trim Toolbar, Move to Display and Create Another Copy.
-  Set the toolbar trim once; it is shared by copies of that source on this Mac.
-- Capture One and the camera still control the shot. DualLink viewers do not
-  forward clicks to Capture One or provide remote camera controls.
-- For maximum iPad viewing area, hide Sidecar's sidebar and Touch Bar in Displays
-  settings. On older Sidecar versions, use Apple Pencil or your Mac's mouse for
-  viewer buttons; direct finger control depends on the OS and input support.
-- Evaluate critical color in Capture One on a calibrated display. DualLink copies
-  the source window's available pixels and cannot add camera detail.
+- Adjust focus in Capture One, if your connected camera and lens support it.
+- Add a grid or reference overlay in Capture One to show it on both views.
+  DualLink's own Grid affects only its copy.
+- Double-click the iPad copy to fill the display; double-click again to return.
+- Click or hover for viewer controls. Right-click for Trim, Fit and more copies.
+- DualLink shows the feed; it does not send camera commands or forward clicks.
+- Hide Sidecar's sidebar and Touch Bar for more viewing space. If finger controls
+  aren't available, use Apple Pencil or your Mac's mouse.
+- Use Capture One on a calibrated display for critical color decisions.
 
-IF A VIEW IS BLANK
-Restore the original Live View window, then refresh the source list. Check window
-capture permission and confirm the iPad is extending the desktop. A closed source
-window must be selected again. Use the shutter icon > Setup Guide for the tour.
+IF THE VIEW IS BLANK
+Restore the original Live View window. Check capture permission and refresh the
+source list. A closed source must be selected again. Reopen Setup Guide anytime.
+Sidecar supports one iPad; other screens use your Mac's display connections.
 
-OPTIONAL: OPEN AUTOMATICALLY AWAY FROM HOME
-Right-click the menu bar icon > Automatic Startup. Enter your own home Wi-Fi name
-and enable the rule. This optional feature needs Location Services access to read
-Wi-Fi names and a Login Item to start after login. It is off on a fresh install.
-Your home network name stays in your Mac's preferences and is not in this package.
+OPTIONAL AUTO-START
+Shutter icon > Automatic Startup lets you open DualLink away from home Wi-Fi.
+This is off on a fresh install. It needs Location permission for Wi-Fi names.
+Your home network name stays on your Mac. Quit stops the watcher until relaunch
+or login. Disconnected Wi-Fi does not count as away.
 
-The watcher opens DualLink once another Wi-Fi connection is stable for 10 seconds.
-Offline or unreadable Wi-Fi names do not count as away. Capture still starts only
-when you select a window. Quit stops the watcher until the next launch or login.
+PRIVATE TEST BUILD
+This app has a local signature and is not Apple-notarized. macOS may block first
+launch. Only open a build you received from someone you trust.
+Apple's first-launch guidance: https://support.apple.com/en-us/102445
+Sidecar setup: https://support.apple.com/en-us/102597

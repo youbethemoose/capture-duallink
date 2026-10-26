@@ -122,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 470, height: 500),
                                 styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
             panel.title = "Capture DualLink"
+            panel.appearance = NSAppearance(named: .aqua)
             panel.titleVisibility = .hidden
             panel.titlebarAppearsTransparent = true
             panel.isReleasedWhenClosed = false
@@ -145,6 +146,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 820, height: height),
                                 styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             panel.title = "Welcome to Capture DualLink"
+            panel.appearance = NSAppearance(named: .aqua)
+            panel.styleMask.insert(.fullSizeContentView)
+            panel.titleVisibility = .hidden
+            panel.titlebarAppearsTransparent = true
+            panel.isMovableByWindowBackground = true
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
             panel.minSize = NSSize(width: 780, height: 590)
@@ -181,6 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 450, height: 460),
                                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
             panel.title = "Automatic Startup"
+            panel.appearance = NSAppearance(named: .aqua)
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
             panel.contentView = NSHostingView(rootView: AutoStartView(startup: startup))

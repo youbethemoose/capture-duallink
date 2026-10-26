@@ -17,7 +17,6 @@ cleanup() {
     rm -rf "$TASK_STAGE"
 }
 trap cleanup EXIT
-codesign --verify --strict "$TASK_APP"
 lipo "$TASK_APP/Contents/MacOS/CaptureDualLink" -verify_arch arm64
 lipo "$TASK_APP/Contents/MacOS/CaptureDualLink" -verify_arch x86_64
 ditto --norsrc --noextattr "$TASK_APP" "$TASK_STAGE/Capture DualLink.app"

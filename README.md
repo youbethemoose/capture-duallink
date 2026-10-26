@@ -1,6 +1,8 @@
 # Capture DualLink
 
-A small native macOS menu bar app that duplicates a selected window into independent viewers. Built for Capture One Live View on a MacBook plus iPads and other displays connected as extended Mac displays.
+A small native macOS menu bar app for collaborative still-life photography. The photographer keeps Capture One's original Live View on the laptop, directs product placement and controls focus, grids and reference overlays. The prop stylist watches a DualLink copy of the same live frame on an iPad while positioning the product.
+
+Keep the original Capture One window on the laptop; move only the DualLink copy onto the iPad. For guides visible to both people, use Capture One's grid or overlay in the original Live View. DualLink's own Grid is local to a viewer. Focus remains in Capture One and depends on camera/lens support; DualLink does not forward focus commands. The interface uses a centered layout, simple instructions and a flat sky-blue/pastel palette. Paired circle, square and triangle compositions explain the shared view without people or computer mockups.
 
 ## Open the app
 

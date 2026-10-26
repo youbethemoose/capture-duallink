@@ -19,10 +19,8 @@ for size in [16, 32, 128, 256, 512] {
         context.addPath(tile)
         context.saveGState()
         context.clip()
-        let colors = [CGColor(red: 0.55, green: 0.96, blue: 0.82, alpha: 1),
-                      CGColor(red: 0.14, green: 0.71, blue: 0.61, alpha: 1)]
-        let gradient = CGGradient(colorsSpace: space, colors: colors as CFArray, locations: [0, 1])!
-        context.drawLinearGradient(gradient, start: CGPoint(x: 180, y: 960), end: CGPoint(x: 820, y: 60), options: [])
+        context.setFillColor(CGColor(red: 0.53, green: 0.70, blue: 0.85, alpha: 1))
+        context.fill(CGRect(x: 62, y: 62, width: 900, height: 900))
         context.restoreGState()
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)

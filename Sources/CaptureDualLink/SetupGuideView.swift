@@ -8,205 +8,143 @@ struct SetupGuideView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    HStack(spacing: 12) {
-                        Image(nsImage: MenuBarIcon.image)
-                            .resizable().scaledToFit().frame(width: 34, height: 28)
-                            .foregroundStyle(.mint)
-                            .frame(width: 54, height: 54)
-                            .background(.mint.opacity(0.12), in: RoundedRectangle(cornerRadius: 15))
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("CAPTURE DUALLINK").font(.system(size: 11, weight: .semibold)).tracking(2)
-                                .foregroundStyle(.mint)
-                            Text("One live view. More eyes on set.").font(.system(size: 28, weight: .semibold))
-                        }
+                VStack(alignment: .center, spacing: 28) {
+                    HStack(spacing: 10) {
+                        Image(nsImage: MenuBarIcon.image).resizable().scaledToFit().frame(width: 26, height: 22)
+                        Text("CAPTURE DUALLINK").font(.system(size: 11, weight: .semibold)).tracking(2.5)
                     }
-                    Text("Keep shooting in Capture One. Give your team a clean, independent view on an iPad or another display.")
-                        .font(.system(size: 14)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    SetupDiagram()
-
-                    HStack(alignment: .top, spacing: 12) {
-                        step(1, title: "Extend your workspace", text: "For an iPad, use Sidecar with the same Apple Account. Or connect a monitor. In Displays, choose an extended display.") {
+                    .frame(maxWidth: .infinity)
+                    .overlay(alignment: .leading) { Rectangle().fill(DualLinkStyle.coral).frame(width: 18, height: 18) }
+                    .overlay(alignment: .trailing) { Circle().fill(DualLinkStyle.yellow).frame(width: 18, height: 18) }
+                    VStack(alignment: .center, spacing: 14) {
+                        Text("Two views.\nOne composition.")
+                            .font(.system(size: 42, weight: .regular)).lineSpacing(-2)
+                        Text("Control Capture One on your laptop. Let the prop stylist see the same live view on the iPad.")
+                            .font(.system(size: 15)).foregroundStyle(DualLinkStyle.mutedInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    HStack(alignment: .top, spacing: 22) {
+                        role("Photographer", subtitle: "Original Capture One Live View", caption: "Focus · grid · reference overlay")
+                        VStack(spacing: 10) {
+                            Image(systemName: "arrow.right").font(.system(size: 20, weight: .light))
+                            Text("SAME\nLIVE FRAME").font(.system(size: 8, weight: .medium)).tracking(1.2).multilineTextAlignment(.center)
+                        }.padding(.top, 115)
+                        role("Prop stylist", subtitle: "DualLink copy on iPad", caption: "Move the product. See the change.")
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("The photographer keeps the original Capture One Live View on the laptop, controlling focus, grids and overlays. The prop stylist watches a copy of the same frame on an iPad while moving the still-life product.")
+                    Text("Capture One stays on the laptop. The copy goes on the iPad.")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(maxWidth: .infinity).padding(16)
+                        .background(DualLinkStyle.yellow)
+                    HStack(alignment: .top, spacing: 20) {
+                        step("01", title: "Connect the iPad", text: "Connect with Sidecar using the same Apple Account. Choose an extended display.") {
                             Button("Open Displays…") {
                                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.displays") {
                                     NSWorkspace.shared.open(url)
                                 }
                             }
                         }
-                        step(2, title: "Allow window capture", text: "Enable Capture DualLink in Screen Recording settings. Quit and reopen if macOS asks.") {
+                        step("02", title: "Allow window capture", text: "Allow DualLink in Screen Recording settings. Reopen if asked.") {
                             if model.hasPermission {
-                                Label("Capture allowed", systemImage: "checkmark.circle.fill")
-                                    .font(.system(size: 12, weight: .medium)).foregroundStyle(.mint)
+                                Label("Capture allowed", systemImage: "checkmark.circle.fill").font(.system(size: 11))
                             } else {
                                 Button("Allow Window Capture…") { model.requestPermission() }
                             }
                         }
-                        step(3, title: "Choose Live View", text: "In Capture One, open Window → Live View. Select that window in DualLink, then click Duplicate Window.") {
-                            Label("Native / Retina · 30 fps", systemImage: "sparkles")
-                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                        step("03", title: "Send the live view", text: "Open Capture One → Window → Live View. Duplicate it in DualLink, then move the copy to the iPad.") {
+                            Text("Start with Native / Retina · 30 fps").font(.system(size: 10))
                         }
                     }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("THEN MAKE THE VIEW YOURS").font(.system(size: 10, weight: .semibold)).tracking(1.6)
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .center, spacing: 18) {
+                        Text("Style. Adjust. Shoot.").font(.system(size: 23, weight: .regular))
                         HStack(alignment: .top, spacing: 24) {
-                            tip("arrow.up.left.and.arrow.down.right", "Move & fill", "Drag a copy to the other display. Double-click it to fill that display; double-click again to return.")
-                            tip("grid", "Frame the shot", "Click or hover for Fit / Fill and Grid. Right-click to trim Capture One’s toolbar or create another copy.")
-                            tip("cursorarrow", "Keep shooting", "Copies keep Capture One’s keyboard focus. Their grid and viewing settings change only that copy.")
+                            note("Direct & focus", "Adjust focus in Capture One and direct the product placement. Camera and lens support is required.")
+                            note("Share your guides", "Use Capture One’s grid or overlay for both views. DualLink’s Grid changes only the iPad copy.")
+                            note("Style & refine", "Watch the iPad while moving the product. Double-click to fill the display. Right-click for Trim and Fit.")
                         }
                     }
-                    .padding(18)
-                    .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
-
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: "info.circle").foregroundStyle(.mint)
-                        Text("Sidecar connects one iPad. Extra monitors use your Mac’s supported display connections. On older Sidecar versions, use Apple Pencil or your Mac’s mouse for viewer controls.")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .padding(22).background(DualLinkStyle.paper)
+                    HStack(alignment: .top) {
+                        Text("Sidecar supports one iPad. Use Apple Pencil or your Mac’s mouse if touch controls aren’t available.")
+                            .font(.system(size: 11)).foregroundStyle(DualLinkStyle.mutedInk)
                             .fixedSize(horizontal: false, vertical: true)
                         Link("Sidecar help ↗", destination: URL(string: "https://support.apple.com/en-us/102597")!)
                             .font(.system(size: 11))
                     }
-                }
-                .padding(26)
+                }.padding(32)
             }
-            Divider()
-            HStack {
-                Text("Reopen this guide from the shutter icon → Setup Guide.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                Spacer()
-                Button("Choose a Window", action: onContinue)
-                    .buttonStyle(.borderedProminent).tint(.mint)
+            VStack(spacing: 10) {
+                Button("Choose Live View", action: onContinue)
+                    .buttonStyle(.borderedProminent).tint(DualLinkStyle.ink)
                     .keyboardShortcut(.defaultAction)
-            }
-            .padding(.horizontal, 26).padding(.vertical, 18)
+                Text("Find this guide anytime under the shutter icon → Setup Guide.")
+                    .font(.system(size: 11)).foregroundStyle(DualLinkStyle.mutedInk)
+            }.frame(maxWidth: .infinity)
+            .padding(.horizontal, 28).padding(.vertical, 18).background(DualLinkStyle.paper)
         }
         .frame(minWidth: 780, minHeight: 560)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .preferredColorScheme(.dark)
+        .background(DualLinkStyle.sky).foregroundStyle(DualLinkStyle.ink)
+        .multilineTextAlignment(.center)
+        .tint(DualLinkStyle.ink).preferredColorScheme(.light)
     }
 
-    private func step<Content: View>(_ number: Int, title: String, text: String,
+    private func role(_ title: String, subtitle: String, caption: String) -> some View {
+        VStack(alignment: .center, spacing: 8) {
+            Text(title).font(.system(size: 20, weight: .regular))
+            Text(subtitle).font(.system(size: 11)).foregroundStyle(DualLinkStyle.mutedInk)
+            ShapeStillLife().padding(.vertical, 6)
+            Text(caption).font(.system(size: 11, weight: .medium))
+        }.frame(maxWidth: .infinity)
+    }
+
+    private func step<Content: View>(_ number: String, title: String, text: String,
                                      @ViewBuilder action: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(String(number)).font(.system(size: 12, weight: .bold)).foregroundStyle(.mint)
-                .frame(width: 26, height: 26)
-                .background(.mint.opacity(0.13), in: Circle())
-            Text(title).font(.system(size: 14, weight: .semibold))
-            Text(text).font(.system(size: 12)).foregroundStyle(.secondary)
+        VStack(alignment: .center, spacing: 10) {
+            Text(number).font(.system(size: 23, weight: .light))
+            Text(title).font(.system(size: 14, weight: .medium))
+            Text(text).font(.system(size: 12)).foregroundStyle(DualLinkStyle.mutedInk)
                 .fixedSize(horizontal: false, vertical: true)
             action().controlSize(.small)
-        }
-        .frame(maxWidth: .infinity, minHeight: 170, alignment: .topLeading)
-        .padding(16)
-        .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+        }.frame(maxWidth: .infinity, alignment: .top)
     }
 
-    private func tip(_ symbol: String, _ title: String, _ detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: symbol).font(.system(size: 12, weight: .semibold))
-            Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
+    private func note(_ title: String, _ text: String) -> some View {
+        VStack(alignment: .center, spacing: 8) {
+            Text(title).font(.system(size: 13, weight: .medium))
+            Text(text).font(.system(size: 11)).foregroundStyle(DualLinkStyle.mutedInk)
                 .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        }.frame(maxWidth: .infinity, alignment: .top)
     }
 }
 
-private struct SetupDiagram: View {
-    var body: some View {
-        HStack(spacing: 18) {
-            VStack(spacing: 9) {
-                HStack(spacing: 8) {
-                    Image(systemName: "camera.fill").font(.system(size: 22))
-                    Image(systemName: "cable.connector").font(.system(size: 14)).foregroundStyle(.secondary)
-                    Text("Your shooting Mac").font(.system(size: 11, weight: .medium))
-                }
-                VStack(spacing: 0) {
-                    HStack(spacing: 4) {
-                        ForEach(0..<3) { _ in Circle().fill(.white.opacity(0.3)).frame(width: 4, height: 4) }
-                        Spacer()
-                        Text("CAPTURE ONE · LIVE VIEW").font(.system(size: 7, weight: .semibold)).tracking(0.8)
-                        Spacer()
-                    }
-                    .padding(8).background(.white.opacity(0.10))
-                    HStack(spacing: 7) {
-                        VStack(spacing: 6) {
-                            ForEach(0..<4) { _ in RoundedRectangle(cornerRadius: 2).fill(.white.opacity(0.15)).frame(width: 22, height: 5) }
-                            Spacer()
-                        }.padding(.top, 10)
-                        SetupPhoto().frame(width: 84, height: 104)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(8)
-                }
-                .frame(width: 190)
-                .background(Color.black.opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.16)))
-                Text("Camera & controls stay here").font(.system(size: 10)).foregroundStyle(.secondary)
-            }
-
-            Image(systemName: "arrow.right").foregroundStyle(.mint.opacity(0.7))
-            VStack(spacing: 10) {
-                Image(nsImage: MenuBarIcon.image).resizable().scaledToFit()
-                    .frame(width: 40, height: 33).foregroundStyle(.mint)
-                    .frame(width: 68, height: 68)
-                    .background(.mint.opacity(0.10), in: RoundedRectangle(cornerRadius: 20))
-                    .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.mint.opacity(0.25)))
-                Text("DUALLINK").font(.system(size: 9, weight: .semibold)).tracking(1.6)
-                Text("One shared stream").font(.system(size: 10)).foregroundStyle(.secondary)
-            }
-            Image(systemName: "arrow.right").foregroundStyle(.mint.opacity(0.7))
-
-            HStack(alignment: .center, spacing: 12) {
-                VStack(spacing: 9) {
-                    SetupPhoto().frame(width: 104, height: 81).padding(6)
-                        .background(.black, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.3)))
-                        .overlay(alignment: .bottom) {
-                            RoundedRectangle(cornerRadius: 2).fill(.white.opacity(0.25))
-                                .frame(width: 28, height: 3).offset(y: 6)
-                        }
-                    Text("Mac / monitor").font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-                VStack(spacing: 9) {
-                    SetupPhoto().frame(width: 76, height: 102).padding(6)
-                        .background(.black, in: RoundedRectangle(cornerRadius: 10))
-                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.3)))
-                    Text("iPad via Sidecar").font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity).padding(.vertical, 20).padding(.horizontal, 16)
-        .background(LinearGradient(colors: [.mint.opacity(0.055), .black.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: RoundedRectangle(cornerRadius: 18))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("One camera feeds Capture One on your shooting Mac. DualLink copies that Live View to independently sized viewers on your Mac, an external monitor, or an iPad connected through Sidecar.")
-    }
-}
-
-private struct SetupPhoto: View {
+private struct ShapeStillLife: View {
     var body: some View {
         GeometryReader { geometry in
+            let w = geometry.size.width, h = geometry.size.height
             ZStack {
-                Color(red: 0.16, green: 0.27, blue: 0.26)
-                LinearGradient(colors: [.mint.opacity(0.3), .clear, .black.opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                Circle().fill(Color(red: 0.88, green: 0.66, blue: 0.48))
-                    .frame(width: geometry.size.width * 0.25, height: geometry.size.width * 0.25)
-                    .offset(y: -geometry.size.height * 0.16)
-                RoundedRectangle(cornerRadius: geometry.size.width * 0.24)
-                    .fill(Color(red: 0.70, green: 0.83, blue: 0.66))
-                    .frame(width: geometry.size.width * 0.54, height: geometry.size.height * 0.58)
-                    .offset(y: geometry.size.height * 0.29)
-                RoundedRectangle(cornerRadius: 1).strokeBorder(.white.opacity(0.35), lineWidth: 0.5)
-                    .padding(geometry.size.width * 0.09)
-            }
-            .clipped()
+                DualLinkStyle.sky
+                Rectangle().fill(DualLinkStyle.coral)
+                    .frame(width: w * 0.29, height: w * 0.29).position(x: w * 0.25, y: h * 0.47)
+                Circle().fill(DualLinkStyle.yellow)
+                    .frame(width: w * 0.40, height: w * 0.40).position(x: w * 0.68, y: h * 0.37)
+                Path { path in
+                    path.move(to: CGPoint(x: w * 0.37, y: h * 0.85))
+                    path.addLine(to: CGPoint(x: w * 0.53, y: h * 0.52))
+                    path.addLine(to: CGPoint(x: w * 0.69, y: h * 0.85))
+                    path.closeSubpath()
+                }.fill(DualLinkStyle.green)
+                Rectangle().fill(DualLinkStyle.lilac).frame(width: w * 0.26, height: h * 0.025)
+                    .rotationEffect(.degrees(-28)).position(x: w * 0.17, y: h * 0.15)
+                Path { path in
+                    for fraction in [CGFloat(1) / 3, CGFloat(2) / 3] {
+                        path.move(to: CGPoint(x: w * fraction, y: 0)); path.addLine(to: CGPoint(x: w * fraction, y: h))
+                        path.move(to: CGPoint(x: 0, y: h * fraction)); path.addLine(to: CGPoint(x: w, y: h * fraction))
+                    }
+                }.stroke(DualLinkStyle.ink.opacity(0.22), style: StrokeStyle(lineWidth: 0.6, dash: [3, 4]))
+            }.clipped()
         }
-        .aspectRatio(4.0 / 5.0, contentMode: .fit)
-        .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black)
+        .aspectRatio(4.0 / 3.0, contentMode: .fit)
         .accessibilityHidden(true)
     }
 }
