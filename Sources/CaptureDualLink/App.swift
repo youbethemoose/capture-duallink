@@ -10,7 +10,7 @@ enum CaptureDualLinkApp {
         NSWindow.allowsAutomaticWindowTabbing = false
         let delegate = AppDelegate()
         application.delegate = delegate
-        application.setActivationPolicy(.accessory)
+        application.setActivationPolicy(.regular)
         application.run()
         withExtendedLifetime(delegate) {}
     }

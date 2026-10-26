@@ -8,7 +8,9 @@ Prop stylist: watch the same live frame on the iPad while placing the product.
 
 INSTALL
 Drag Capture DualLink.app to Applications. Eject the disk image and open the app.
-The Setup Guide opens the first time. Look for the linked shutter in the menu bar.
+The Setup Guide opens the first time. The linked shutter is in the Dock and menu
+bar; click either to reopen the window picker. Closing the picker keeps the app
+running. To keep its Dock icon after quitting, right-click it > Options > Keep in Dock.
 Requires macOS 14 or later; supports Apple silicon and Intel Macs.
 
 SET UP

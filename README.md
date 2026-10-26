@@ -1,6 +1,6 @@
 # Capture DualLink
 
-A small native macOS menu bar app for collaborative still-life photography. The photographer keeps Capture One's original Live View on the laptop, directs product placement and controls focus, grids and reference overlays. The prop stylist watches a DualLink copy of the same live frame on an iPad while positioning the product.
+A small native macOS app for collaborative still-life photography. The photographer keeps Capture One's original Live View on the laptop, directs product placement and controls focus, grids and reference overlays. The prop stylist watches a DualLink copy of the same live frame on an iPad while positioning the product.
 
 Keep the original Capture One window on the laptop; move only the DualLink copy onto the iPad. For guides visible to both people, use Capture One's grid or overlay in the original Live View. DualLink's own Grid is local to a viewer. Focus remains in Capture One and depends on camera/lens support; DualLink does not forward focus commands. The interface uses a centered layout, simple instructions and a flat sky-blue/pastel palette. Paired circle, square and triangle compositions explain the shared view without people or computer mockups.
 
@@ -8,7 +8,9 @@ Keep the original Capture One window on the laptop; move only the DualLink copy 
 
 For a shared disk image, drag **Capture DualLink.app** to **Applications**, eject the image, and open the installed app. The illustrated setup guide opens on first use. It shows how the camera, Capture One and independent viewers fit together, then walks through display setup and capture permission. Reopen it from **Setup Guide** in the picker or the shutter icon's right-click menu.
 
-For a local build, open `dist/Capture DualLink.app`. The **linked shutter** icon appears in the menu bar; the app has no Dock icon. For everyday use, quit the app and run `./scripts/install-app.sh` to copy it to your user Applications folder.
+The **linked shutter** icon appears in both the Dock and menu bar. Click either to reopen the window picker. Closing the picker leaves DualLink running; choose **Quit Capture DualLink** to exit. To keep its Dock icon after quitting, right-click it and choose **Options → Keep in Dock**.
+
+For a local build, open `dist/Capture DualLink.app`. For everyday use, quit the app and run `./scripts/install-app.sh` to copy it to your user Applications folder.
 
 1. Click **Allow Window Capture** and enable **Capture DualLink** under System Settings → Privacy & Security → Screen & System Audio Recording. Follow any macOS request to quit and reopen, then click **Refresh**.
 2. Open **Window → Live View** in Capture One.

@@ -8,10 +8,9 @@
     <key>CFBundleDisplayName</key><string>Capture DualLink</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleIconFile</key><string>DualLink</string>
-    <key>CFBundleShortVersionString</key><string>1.8.0</string>
-    <key>CFBundleVersion</key><string>14</string>
+    <key>CFBundleShortVersionString</key><string>1.8.1</string>
+    <key>CFBundleVersion</key><string>15</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
-    <key>LSUIElement</key><true/>
     <key>LSMultipleInstancesProhibited</key><true/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSScreenCaptureUsageDescription</key><string>Capture DualLink copies the window you select into independently sized viewers for your Mac and iPad displays.</string>

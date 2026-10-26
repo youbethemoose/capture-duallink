@@ -369,8 +369,8 @@ final class CaptureProbe {
         samples["fillDisplayFrame"] = "\(window.frame) on \(screen.frame)"
         check(viewer.isFillingDisplay && window.frame == screen.frame, "Double-click fills the whole display, menu bar included")
         check(window.level.rawValue >= NSWindow.Level.statusBar.rawValue, "Fill Display sits above the menu bar")
-        check(NSApp.keyWindow !== window && NSApp.activationPolicy() == .accessory,
-              "Fill Display never brings DualLink to the front")
+        check(NSApp.keyWindow === keyBefore && NSApp.keyWindow !== window && NSApp.activationPolicy() == .regular,
+              "Fill Display preserves keyboard focus with the Dock enabled")
         check(viewer.surface.drawableSize == backing, "Fill Display renders at the display's backing pixels")
         check(viewer.options.mode == .fill && viewer.options.showGrid, "Fill Display preserves the copy's fit and grid")
         click(2)
