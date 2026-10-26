@@ -191,12 +191,14 @@ final class AppModel: ObservableObject {
                 throw NSError(domain: "CaptureDualLink", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "The source window closed. Refresh and select its replacement."])
             }
+            guard sessions[source.id] === session, !shuttingDown else { await session.stop(); return }
             try await session.start(window: window)
             guard sessions[source.id] === session, !shuttingDown else { await session.stop(); return }
             message = nil
             startPollingIfNeeded()
             onDuplicated?(session.sourceProcessID)
         } catch {
+            guard sessions[source.id] === session else { await session.stop(); return }
             sessions.removeValue(forKey: source.id)
             await session.stop()
             mirror?.close()
@@ -318,17 +320,17 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshActiveSourcesOnce() async {
+        // Stop capture altogether when every copy is offscreen or minimized.
+        for (id, session) in Array(sessions) where !hasDemand(for: id) {
+            guard sessions[id] === session else { continue }
+            if session.active || session.failed { await session.stop() }
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        let candidates = Array(sessions).filter { id, session in
+            hasDemand(for: id) && (session.active || (recovery[id] ?? RecoveryBackoff()).isReady(at: now))
+        }
+        guard !candidates.isEmpty else { return }
         do {
-            // Stop capture altogether when every copy is offscreen or minimized.
-            for (id, session) in Array(sessions) where !hasDemand(for: id) {
-                guard sessions[id] === session else { continue }
-                if session.active || session.failed { await session.stop() }
-            }
-            let now = ProcessInfo.processInfo.systemUptime
-            let candidates = Array(sessions).filter { id, session in
-                hasDemand(for: id) && (session.active || (recovery[id] ?? RecoveryBackoff()).isReady(at: now))
-            }
-            guard !candidates.isEmpty else { return }
             let content = try await activeContent()
             // Copy the collection before awaiting; windows can close while an update runs.
             for (id, session) in candidates {
@@ -359,6 +361,11 @@ final class AppModel: ObservableObject {
             }
         } catch {
             message = "Window update failed: \(error.localizedDescription)"
+            for (id, session) in candidates where sessions[id] === session && !session.active &&
+                hasDemand(for: id) && !sleeping && !shuttingDown {
+                recovery[id, default: RecoveryBackoff()].failed(at: ProcessInfo.processInfo.systemUptime)
+                session.onStatus?("Could not reconnect. Check Screen Recording permission; DualLink will retry.")
+            }
         }
     }
 }

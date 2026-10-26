@@ -37,6 +37,11 @@ Restore the original Live View window. Check capture permission and refresh the
 source list. A closed source must be selected again. Reopen Setup Guide anytime.
 Sidecar supports one iPad; other screens use your Mac's display connections.
 
+BEFORE THE SHOOT
+Try your actual camera, Mac and iPad together. Confirm both views update while
+moving a product, test focus in Capture One, and check a shared grid or overlay.
+Disconnect and reconnect the iPad once so you know the recovery steps on your kit.
+
 OPTIONAL AUTO-START
 Shutter icon > Automatic Startup lets you open DualLink away from home Wi-Fi.
 This is off on a fresh install. It needs Location permission for Wi-Fi names.

@@ -75,6 +75,10 @@ final class CaptureSession: NSObject, SCStreamDelegate {
     }
 
     func start(window: SCWindow) async throws {
+        guard window.windowID == sourceID, window.owningApplication?.processID == sourceProcessID else {
+            throw NSError(domain: "CaptureDualLink", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "The selected source changed. Refresh and select the window again."])
+        }
         guard !starting else { return }
         starting = true
         defer { starting = false }
@@ -171,6 +175,7 @@ final class CaptureSession: NSObject, SCStreamDelegate {
     nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
         Task { @MainActor [weak self] in
             guard let self, !self.stopped, self.stream === stream else { return }
+            self.generation = UUID()
             self.active = false
             self.failed = true
             self.output?.invalidate()

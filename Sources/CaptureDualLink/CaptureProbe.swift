@@ -54,7 +54,10 @@ final class CaptureProbe {
             do {
                 try await Task.sleep(for: .milliseconds(350))
                 try await verifyCapture(engine: engine, source: source)
-                if CommandLine.arguments.contains("--check-performance"), failure == nil { await verifyPipeline() }
+                if CommandLine.arguments.contains("--check-performance"), failure == nil {
+                    await verifyPipeline()
+                    await verifyCaptureLifecycle()
+                }
                 if CommandLine.arguments.contains("--check-fill-display") ||
                     CommandLine.arguments.contains("--check-fullscreen"), failure == nil {
                     verifyFocusAndFillDisplay()
@@ -312,6 +315,78 @@ final class CaptureProbe {
         } catch { check(false, "Pipeline verification: \(error.localizedDescription)") }
     }
 
+    private func verifyCaptureLifecycle() async {
+        guard #available(macOS 14.4, *), let source else { return }
+        do {
+            let content = try await SCShareableContent.currentProcess
+            guard let window = content.windows.first(where: { $0.windowID == CGWindowID(source.windowNumber) }),
+                  let other = content.windows.first(where: { $0.windowID != window.windowID }) else {
+                throw ProbeError("Lifecycle calibration windows are unavailable.")
+            }
+            let chosen = WindowSource(window: window)
+            let mismatched = CaptureSession(source: chosen, detail: .native, fps: 30)
+            do {
+                try await mismatched.start(window: other)
+                check(false, "A capture session rejects a different source window")
+            } catch {
+                check(!mismatched.active, "A capture session rejects a different source window")
+            }
+            await mismatched.stop()
+
+            var pending: CheckedContinuation<SCShareableContent, Error>?
+            var reads = 0
+            let model = AppModel(persistPreferences: false, activeContent: {
+                reads += 1
+                if reads == 1 { return try await withCheckedThrowingContinuation { pending = $0 } }
+                return try await SCShareableContent.currentProcess
+            })
+            verificationModel = model
+            let abandoned = Task { await model.duplicate(chosen) }
+            await waitUntil { pending != nil }
+            guard let pendingRead = pending, let connecting = model.mirrors.values.first else {
+                model.shutdown(); abandoned.cancel()
+                throw ProbeError("Could not hold the initial source lookup.")
+            }
+            connecting.close()
+            await model.duplicate(chosen)
+            let replacement = model.sessions[chosen.id]
+            pendingRead.resume(throwing: ProbeError("Simulated delayed lookup failure"))
+            await abandoned.value
+            check(replacement != nil && model.sessions[chosen.id] === replacement && model.mirrorCount == 1,
+                  "An abandoned connection cannot remove a newer copy of the same source")
+            model.shutdown()
+            await replacement?.stop()
+
+            var failReads = false, failedReads = 0
+            let retryModel = AppModel(persistPreferences: false, activeContent: {
+                if failReads { failedReads += 1; throw ProbeError("Simulated window-list outage") }
+                return try await SCShareableContent.currentProcess
+            })
+            verificationModel = retryModel
+            defer { retryModel.shutdown(); verificationModel = nil }
+            await retryModel.duplicate(chosen)
+            guard let retrySession = retryModel.sessions[chosen.id] else {
+                throw ProbeError("Could not start the reconnect calibration.")
+            }
+            await retrySession.stop()
+            failReads = true
+            retryModel.applyCaptureSettings()
+            await waitUntil { failedReads > 0 }
+            retryModel.applyCaptureSettings()
+            try await Task.sleep(for: .milliseconds(150))
+            check(failedReads == 1, "Window-list failures back off repeated reconnect requests")
+            failReads = false
+            retryModel.resumeAfterSleep()
+            await waitUntil { retrySession.active && retrySession.latestFrame != nil }
+            check(retrySession.active && retrySession.latestFrame != nil,
+                  "Capture recovers after window listing becomes available again")
+            retryModel.closeAll()
+            await waitUntil { !retrySession.active && retrySession.latestFrame == nil }
+            check(retryModel.sessions.isEmpty && retryModel.mirrors.isEmpty && retrySession.latestFrame == nil,
+                  "Closing the last copy releases its session and live frame")
+        } catch { check(false, "Capture lifecycle verification: \(error.localizedDescription)") }
+    }
+
     private func waitUntil(_ predicate: () -> Bool) async {
         let deadline = ProcessInfo.processInfo.systemUptime + 5
         while !predicate(), ProcessInfo.processInfo.systemUptime < deadline, !finished {
@@ -378,6 +453,13 @@ final class CaptureProbe {
         check(abs(window.frame.width - originalFrame.width) < 2 && abs(window.frame.height - originalFrame.height) < 2,
               "Leaving Fill Display restores the original window size")
         check(window.level == .floating, "Leaving Fill Display restores Keep on Top")
+
+        window.setFrameOrigin(NSPoint(x: screen.frame.maxX + 5000, y: screen.frame.minY))
+        viewer.toggleFillDisplay()
+        viewer.toggleFillDisplay()
+        check(NSScreen.screens.contains { $0.visibleFrame.intersects(window.frame) },
+              "Leaving Fill Display keeps a copy reachable after its old display disappears")
+        window.setFrame(originalFrame, display: true)
     }
 
     // MARK: Helpers
