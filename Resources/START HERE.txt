@@ -25,9 +25,15 @@ ON SET
 - Adjust focus in Capture One, if your connected camera and lens support it.
 - Add a grid or reference overlay in Capture One to show it on both views.
   DualLink's own Grid affects only its copy.
-- Double-click the iPad copy to fill the display; double-click again to return.
-- Click or hover for viewer controls. Right-click for Trim, Fit and more copies.
-- DualLink shows the feed; it does not send camera commands or forward clicks.
+- Hover for controls. Click Control to use the mouse in the original window.
+  Allow DualLink in System Settings > Privacy & Security > Accessibility.
+  Clicks, drags and scrolling then reach Capture One; the cursor stays on the copy.
+- Use Fill Display in the floating toolbar to fill the iPad. Double-click also
+  fills/exits in view-only mode; with Control On it goes to Capture One instead.
+- Use the floating toolbar's three dots for Trim, Fit and more copies.
+  Reset Trim to bring back source buttons you previously cropped out.
+- Separate source menus/dialogs aren't included in a single window's copy.
+  Focus and zoom behavior depend on the original app, camera and lens.
 - Hide Sidecar's sidebar and Touch Bar for more viewing space. If finger controls
   aren't available, use Apple Pencil or your Mac's mouse.
 - Use Capture One on a calibrated display for critical color decisions.

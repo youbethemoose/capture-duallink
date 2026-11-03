@@ -19,7 +19,10 @@ for TASK_ARCH in "${TASK_ARCHITECTURES[@]}"; do
     TASK_BIN_DIR=$(swift build "${SWIFT_OPTIONS[@]}" --arch "$TASK_ARCH" --configuration release --show-bin-path)
     TASK_BINARIES+=("$TASK_BIN_DIR/CaptureDualLink")
 done
-TASK_APP="$TASK_ROOT/dist/Capture DualLink.app"
+# Sign outside synced Documents folders, which can reattach Finder metadata mid-signature.
+TASK_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/duallink-build.XXXXXX")
+trap 'rm -rf "$TASK_STAGE"' EXIT
+TASK_APP="$TASK_STAGE/Capture DualLink.app"
 mkdir -p "$TASK_APP/Contents/MacOS" "$TASK_APP/Contents/Resources"
 lipo -create "${TASK_BINARIES[@]}" -output "$TASK_APP/Contents/MacOS/CaptureDualLink"
 cp "$TASK_ROOT/Resources/Info.plist" "$TASK_APP/Contents/Info.plist"
@@ -46,4 +49,6 @@ else
     codesign --force --sign - --identifier com.captureduallink.mac "$TASK_APP"
 fi
 codesign --verify --strict "$TASK_APP"
-print "Built: $TASK_APP"
+mkdir -p "$TASK_ROOT/dist"
+ditto --norsrc --noextattr "$TASK_APP" "$TASK_ROOT/dist/Capture DualLink.app"
+print "Built: $TASK_ROOT/dist/Capture DualLink.app"

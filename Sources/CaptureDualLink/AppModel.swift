@@ -222,7 +222,8 @@ final class AppModel: ObservableObject {
         guard let engine, let trimModel = trims[sourceID] else { return nil }
         sequence += 1
         let mirror = MirrorWindowController(sourceID: sourceID, title: title, sequence: sequence,
-                                            engine: engine, trimModel: trimModel)
+                                            engine: engine, trimModel: trimModel,
+                                            sourceProcessID: sessions[sourceID]?.sourceProcessID)
         mirror.onRequestFrame = { [weak self] in self?.sessions[sourceID]?.latestFrame }
         mirror.onActivityChange = { [weak self] in self?.scheduleActivityRefresh() }
         mirror.onClose = { [weak self] id in self?.removeMirror(id) }

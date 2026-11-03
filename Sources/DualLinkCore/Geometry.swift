@@ -35,6 +35,22 @@ public struct SourceTrim: Equatable, Codable {
 }
 
 public enum ImageGeometry {
+    /// Viewer coordinates are bottom-left; the source rectangle is top-left window points.
+    public static func sourcePoint(_ point: CGPoint, viewerSize: CGSize, imageSize: CGSize,
+                                   sourceRect: CGRect, mode: ImageFit, clamp: Bool = false) -> CGPoint? {
+        let placed = placement(source: imageSize, destination: viewerSize, mode: mode)
+        guard placed.width > 0, placed.height > 0, point.x.isFinite, point.y.isFinite,
+              sourceRect.minX.isFinite, sourceRect.minY.isFinite,
+              sourceRect.width.isFinite, sourceRect.height.isFinite,
+              sourceRect.width > 0, sourceRect.height > 0 else { return nil }
+        var x = (point.x - placed.minX) / placed.width
+        var y = (point.y - placed.minY) / placed.height
+        guard clamp || (x >= 0 && x <= 1 && y >= 0 && y <= 1) else { return nil }
+        x = min(1, max(0, x)); y = min(1, max(0, y))
+        return CGPoint(x: sourceRect.minX + x * sourceRect.width,
+                       y: sourceRect.minY + (1 - y) * sourceRect.height)
+    }
+
     /// ScreenCaptureKit's content rect is in logical points with a top-left origin.
     /// Convert it to buffer pixels before cropping with Core Image.
     public static func captureContentRect(points: CGRect, pixelScale: CGFloat, bufferSize: CGSize) -> CGRect {

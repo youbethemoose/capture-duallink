@@ -37,6 +37,9 @@ struct SetupGuideView: View {
                         .font(.system(size: 13, weight: .medium))
                         .frame(maxWidth: .infinity).padding(16)
                         .background(DualLinkStyle.yellow)
+                    Text("To use the mouse on the copy, click Control in its floating toolbar and allow Accessibility access.")
+                        .font(.system(size: 13)).foregroundStyle(DualLinkStyle.mutedInk)
+                        .fixedSize(horizontal: false, vertical: true)
                     HStack(alignment: .top, spacing: 20) {
                         step("01", title: "Connect the iPad", text: "Connect with Sidecar using the same Apple Account. Choose an extended display.") {
                             Button("Open Displays…") {
@@ -61,7 +64,7 @@ struct SetupGuideView: View {
                         HStack(alignment: .top, spacing: 24) {
                             note("Direct & focus", "Adjust focus in Capture One and direct the product placement. Camera and lens support is required.")
                             note("Share your guides", "Use Capture One’s grid or overlay for both views. DualLink’s Grid changes only the iPad copy.")
-                            note("Style & refine", "Watch the iPad while moving the product. Double-click to fill the display. Right-click for Trim and Fit.")
+                            note("Style & refine", "Enable Control to click and scroll the original. Use the floating toolbar for Fill Display, Grid and more options.")
                         }
                     }
                     .padding(22).background(DualLinkStyle.paper)

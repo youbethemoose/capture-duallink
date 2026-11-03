@@ -2,7 +2,7 @@
 
 A small native macOS app for collaborative still-life photography. The photographer keeps Capture One's original Live View on the laptop, directs product placement and controls focus, grids and reference overlays. The prop stylist watches a DualLink copy of the same live frame on an iPad while positioning the product.
 
-Keep the original Capture One window on the laptop; move only the DualLink copy onto the iPad. For guides visible to both people, use Capture One's grid or overlay in the original Live View. DualLink's own Grid is local to a viewer. Focus remains in Capture One and depends on camera/lens support; DualLink does not forward focus commands. The interface uses a centered layout, simple instructions and a flat sky-blue/pastel palette. Paired circle, square and triangle compositions explain the shared view without people or computer mockups.
+Keep the original Capture One window on the laptop; move only the DualLink copy onto the iPad. For guides visible to both people, use Capture One's grid or overlay in the original Live View. DualLink's own Grid is local to a viewer. Enable **Control** in a copy's toolbar to click, drag and scroll in the original window. Focus is still handled by Capture One and depends on camera/lens support. The interface uses a centered layout, simple instructions and a flat sky-blue/pastel palette. Paired circle, square and triangle compositions explain the shared view without people or computer mockups.
 
 ## Open the app
 
@@ -30,7 +30,17 @@ Capture doesn't start until you choose a source window. Returning home leaves ac
 
 ## Capture One keeps the keyboard
 
-Copies never take keyboard focus. Clicking, tapping or double-clicking a copy, or using its controls, leaves Capture One as the front app, so ⌘K and every other Capture One shortcut keep working. DualLink has no viewer keyboard shortcuts of its own for the same reason. The window picker, trim panel and automatic startup settings can bring DualLink to the front. Duplicating a window or finishing a trim hands focus back to the source app.
+Copies never become the key window. In view-only mode, clicking or double-clicking a copy leaves keyboard focus where it was. **Control Source** directs mouse input to the selected source and activates its app, so Capture One keeps its shortcuts. DualLink has no viewer keyboard shortcuts. The window picker, permission dialog, trim panel and automatic startup settings can bring DualLink to the front.
+
+## Mouse control
+
+Hover over a copy and click **Control**. Allow Capture DualLink under **System Settings → Privacy & Security → Accessibility**, then return to the copy. Its button reads **Control On** while enabled. Each copy chooses its own control mode.
+
+Clicks, double-clicks, left/right/middle drags and scroll-wheel input target the same position in the original window. Fit/Fill, Retina scale and toolbar trimming are accounted for; letterbox bars ignore clicks. DualLink's floating controls stay local. In control mode, use the **Fill Display** button because double-clicks go to Capture One; use **⋯** for DualLink's menu. Reset Trim if you want to see and click source controls you previously cropped out. Menus, dialogs and popovers that Capture One opens as separate windows are outside the selected window's capture.
+
+The source app handles each control's behavior, including zoom and camera focus. DualLink does not send camera commands directly or monitor global input. The desktop cursor stays on the copy. Mouse control stops if the source owner changes or its displayed geometry is stale, and releases held buttons when control is disabled or a viewer closes or pauses. Capture quality and the GPU pipeline are independent of this mode.
+
+Window-local event positioning currently uses a runtime-resolved macOS SkyLight SPI alongside public process-targeted Quartz events. If the SPI is absent, Control Source is unavailable. macOS updates or a source app's event handling can affect compatibility; test the controls you need on your Capture One version before a shoot.
 
 ## Trim, picture detection and the grid
 
@@ -42,13 +52,13 @@ Inside the trimmed area, DualLink finds the camera picture automatically. Captur
 
 ## Viewing
 
-Click, tap or hover over a copy to show its controls for a few seconds: **Fit/Fill**, **Grid**, **Fill Display**, and **⋯** for everything else. The same options are in the right-click menu.
+Hover over a copy to show its controls: **Fit/Fill**, **Grid**, **Control**, **Fill Display**, and **⋯** for everything else. In view-only mode, a click or tap also shows them and right-click opens the same options.
 
 - **Fit** shows the whole image with black bars when aspect ratios differ. **Fill** fills the viewer and crops the excess. Both preserve proportions.
-- **Fill Display**: double-click or double-tap a copy, or use its button, to cover that whole display, menu bar included. Double-click again to return to a window. It isn't macOS fullscreen, which would bring DualLink to the front and take Capture One's shortcuts. There's no separate Space, and Escape doesn't exit because keystrokes stay with Capture One.
+- **Fill Display**: use its button to cover the whole display, menu bar included. In view-only mode, double-click also enters/exits. It isn't macOS fullscreen, which would bring DualLink to the front and take Capture One's shortcuts. There's no separate Space, and Escape doesn't exit because keystrokes stay with Capture One.
 - **Move to Display** and **Keep on Top** are in the right-click menu.
 
-Copies render with Metal at each window's actual backing-pixel size, so moving one between Retina, non-Retina and Sidecar displays adapts automatically. Capture and rendering use Display P3, so Capture One's wide-gamut Live View colors aren't clipped to sRGB. DualLink copies the pixels Capture One renders. It doesn't add camera detail, operate the camera, or forward clicks to Capture One. Use Capture One's own viewer on a calibrated display for critical color evaluation.
+Copies render with Metal at each window's actual backing-pixel size, so moving one between Retina, non-Retina and Sidecar displays adapts automatically. Capture and rendering use Display P3, so Capture One's wide-gamut Live View colors aren't clipped to sRGB. DualLink copies the pixels Capture One renders; it doesn't add camera detail. Use Capture One's own viewer on a calibrated display for critical color evaluation.
 
 **Native / Retina** captures the source window's available pixels, with an 8192-pixel long-edge safety limit. **Balanced** and **Light** cap the long edge at 2560 and 1920 pixels without upscaling. Frame rate is 15, 30 or 60 fps.
 

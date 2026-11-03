@@ -5,12 +5,13 @@ import CoreImage
 import DualLinkCore
 
 enum ViewerCommand: Int {
-    case fit, fill, grid, fillDisplay, trim, resetTrim, keepOnTop, duplicate
+    case fit, fill, grid, fillDisplay, trim, resetTrim, keepOnTop, duplicate, controlSource
 }
 
 final class MirrorOptions: ObservableObject {
     @Published var mode: ImageFit = .fit
     @Published var showGrid = false
+    @Published var controlSource = false
 }
 
 /// Shared by every copy of one source: the fixed chrome to trim, in source points.
@@ -58,6 +59,8 @@ final class MirrorSurface: MTKView, MTKViewDelegate {
     var onPointerActivity: (() -> Void)?
     var onMenu: (() -> NSMenu)?
     var shouldRender: (() -> Bool)?
+    var onSourceEvent: ((NSEvent) -> Void)?
+    private(set) var capturedFrame: CapturedFrame?
     private let inFlight = DispatchSemaphore(value: 2)
     private var redrawPending = false
     private(set) var droppedRenders = 0
@@ -84,12 +87,13 @@ final class MirrorSurface: MTKView, MTKViewDelegate {
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func update(_ frame: CapturedFrame) {
+        capturedFrame = frame
         frameImage = frame.image
         pictureArea = frame.pictureArea
         needsDisplay = true
     }
 
-    func discardLiveFrame() { frameImage = nil; redrawPending = false }
+    func discardLiveFrame() { capturedFrame = nil; frameImage = nil; redrawPending = false }
 
     func draw(in view: MTKView) {
         guard shouldRender?() != false, drawableSize.width > 0, drawableSize.height > 0 else { return }
@@ -178,9 +182,24 @@ final class MirrorSurface: MTKView, MTKViewDelegate {
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {
+        if options.controlSource { onSourceEvent?(event); return }
         if event.clickCount == 2 { onDoubleClick?() } else { onClick?() }
     }
-    override func mouseMoved(with event: NSEvent) { onPointerActivity?() }
+    override func mouseUp(with event: NSEvent) { if options.controlSource { onSourceEvent?(event) } }
+    override func mouseDragged(with event: NSEvent) { if options.controlSource { onSourceEvent?(event) } }
+    override func rightMouseDown(with event: NSEvent) {
+        if options.controlSource { onSourceEvent?(event) } else { super.rightMouseDown(with: event) }
+    }
+    override func rightMouseUp(with event: NSEvent) { if options.controlSource { onSourceEvent?(event) } }
+    override func rightMouseDragged(with event: NSEvent) { if options.controlSource { onSourceEvent?(event) } }
+    override func otherMouseDown(with event: NSEvent) { if options.controlSource { onSourceEvent?(event) } }
+    override func otherMouseUp(with event: NSEvent) { if options.controlSource { onSourceEvent?(event) } }
+    override func otherMouseDragged(with event: NSEvent) { if options.controlSource { onSourceEvent?(event) } }
+    override func scrollWheel(with event: NSEvent) { if options.controlSource { onSourceEvent?(event) } }
+    override func mouseMoved(with event: NSEvent) {
+        onPointerActivity?()
+        if options.controlSource { onSourceEvent?(event) }
+    }
     override func mouseEntered(with event: NSEvent) { onPointerActivity?() }
     override func menu(for event: NSEvent) -> NSMenu? { onMenu?() }
 }
@@ -225,6 +244,7 @@ final class ViewerOverlay: NSVisualEffectView {
         let specifications: [(ViewerCommand, String, String?, String)] = [
             (.fit, "Fit", nil, "Fit or Fill"),
             (.grid, "", "grid", "Rule of Thirds Grid"),
+            (.controlSource, "Control", nil, "Control Source"),
             (.fillDisplay, "", "arrow.up.left.and.arrow.down.right", "Fill Display")
         ]
         for (command, title, symbol, label) in specifications {
@@ -248,6 +268,9 @@ final class ViewerOverlay: NSVisualEffectView {
     func update(options: MirrorOptions, fillingDisplay: Bool) {
         buttons[.fit]?.title = options.mode == .fit ? "Fit" : "Fill"
         buttons[.grid]?.contentTintColor = options.showGrid ? .systemTeal : .white
+        buttons[.controlSource]?.contentTintColor = options.controlSource ? .systemTeal : .white
+        buttons[.controlSource]?.title = options.controlSource ? "Control On" : "Control"
+        buttons[.controlSource]?.setAccessibilityValue(options.controlSource ? "On" : "Off")
         buttons[.fillDisplay]?.image = NSImage(systemSymbolName: fillingDisplay ? "arrow.down.right.and.arrow.up.left"
                                                                                 : "arrow.up.left.and.arrow.down.right",
                                                accessibilityDescription: fillingDisplay ? "Exit Fill Display" : "Fill Display")
@@ -268,6 +291,7 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     let trimModel: TrimModel
     let surface: MirrorSurface
     let overlay = ViewerOverlay()
+    let mouseControl: SourceMouseControl
     var onClose: ((UUID) -> Void)?
     var onDuplicate: (() -> Void)?
     var onRequestFrame: (() -> CapturedFrame?)?
@@ -292,15 +316,17 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
             window?.occlusionState.contains(.visible) == true
     }
 
-    init(sourceID: CGWindowID, title: String, sequence: Int, engine: RenderEngine, trimModel: TrimModel) {
+    init(sourceID: CGWindowID, title: String, sequence: Int, engine: RenderEngine, trimModel: TrimModel,
+         sourceProcessID: pid_t? = nil) {
         self.sourceID = sourceID; self.sequence = sequence; self.trimModel = trimModel
+        mouseControl = SourceMouseControl(windowID: sourceID, processID: sourceProcessID)
         surface = MirrorSurface(engine: engine, options: options)
         let window = ViewerPanel(contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
                                  styleMask: [.titled, .closable, .miniaturizable, .resizable, .nonactivatingPanel],
                                  backing: .buffered, defer: false)
         super.init(window: window)
         window.title = "\(title) · Copy \(sequence)"
-        window.minSize = NSSize(width: 240, height: 160)
+        window.minSize = NSSize(width: 320, height: 180)
         window.backgroundColor = .black
         window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false
@@ -314,6 +340,7 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         surface.onDoubleClick = { [weak self] in self?.toggleFillDisplay() }
         surface.onMenu = { [weak self] in self?.makeMenu() ?? NSMenu() }
         surface.shouldRender = { [weak self] in self?.wantsLiveFrames ?? false }
+        surface.onSourceEvent = { [weak self] in self?.sendToSource($0) }
         status.font = .systemFont(ofSize: 15, weight: .medium)
         status.textColor = .white
         status.alignment = .center
@@ -372,6 +399,7 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     }
 
     func showStatus(_ message: String?) {
+        if message != nil { hasImage = false; mouseControl.cancel() }
         status.stringValue = message ?? ""
         status.isHidden = message == nil
     }
@@ -400,6 +428,7 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     }
 
     func releaseLiveFrame() {
+        mouseControl.cancel()
         hasImage = false
         surface.discardLiveFrame()
     }
@@ -460,6 +489,7 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         }
         menu.addItem(item("Rule of Thirds Grid", #selector(toggleGrid), checked: options.showGrid))
         menu.addItem(item(isFillingDisplay ? "Exit Fill Display" : "Fill Display", #selector(fillDisplay)))
+        menu.addItem(item("Control Source", #selector(toggleSourceControl), checked: options.controlSource))
         menu.addItem(.separator())
         menu.addItem(item("Trim \(trimModel.appName) Toolbar…", #selector(showTrim)))
         menu.addItem(item("Reset Trim", #selector(resetTrim), enabled: trimModel.trim != .none))
@@ -489,6 +519,7 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         case .resetTrim: resetTrim()
         case .keepOnTop: toggleFloating()
         case .duplicate: duplicate()
+        case .controlSource: toggleSourceControl()
         }
     }
 
@@ -500,6 +531,31 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         options.mode = mode
     }
     @objc private func toggleGrid() { options.showGrid.toggle() }
+    @objc private func toggleSourceControl() {
+        guard SourceMouseControl.isSupported else {
+            let alert = NSAlert(); alert.messageText = "Mouse control is unavailable on this macOS version."
+            alert.runModal(); return
+        }
+        options.controlSource.toggle()
+        if !options.controlSource { mouseControl.cancel() }
+        else if !SourceMouseControl.hasPermission { SourceMouseControl.explainPermission() }
+        updateControls()
+    }
+
+    private func sendToSource(_ event: NSEvent) {
+        guard hasImage, let frame = surface.capturedFrame, wantsLiveFrames else { mouseControl.cancel(); return }
+        if !SourceMouseControl.hasPermission,
+           mouseControl.processID != ProcessInfo.processInfo.processIdentifier {
+            if event.type == .leftMouseDown || event.type == .rightMouseDown { SourceMouseControl.explainPermission() }
+            return
+        }
+        var point = surface.convert(event.locationInWindow, from: nil)
+        if surface.isFlipped { point.y = surface.bounds.height - point.y }
+        guard let mapped = ImageGeometry.sourcePoint(point, viewerSize: surface.bounds.size,
+                                                      imageSize: frame.nativeSize, sourceRect: frame.sourceRect,
+                                                      mode: options.mode, clamp: mouseControl.isDragging) else { return }
+        mouseControl.send(event, point: mapped, sourceSize: frame.sourceSize)
+    }
     @objc private func fillDisplay() { toggleFillDisplay() }
     @objc private func toggleFloating() {
         guard !isFillingDisplay else { return }

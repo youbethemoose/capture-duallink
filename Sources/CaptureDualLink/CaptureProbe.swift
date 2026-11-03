@@ -54,6 +54,7 @@ final class CaptureProbe {
             do {
                 try await Task.sleep(for: .milliseconds(350))
                 try await verifyCapture(engine: engine, source: source)
+                if failure == nil { await verifyMouseControl() }
                 if CommandLine.arguments.contains("--check-performance"), failure == nil {
                     await verifyPipeline()
                     await verifyCaptureLifecycle()
@@ -315,6 +316,82 @@ final class CaptureProbe {
         } catch { check(false, "Pipeline verification: \(error.localizedDescription)") }
     }
 
+    private func verifyMouseControl() async {
+        guard let source, let pattern, let engine, let frame = viewers.first?.surface.capturedFrame else {
+            check(false, "Mouse calibration has a captured source frame"); return
+        }
+        let viewer = MirrorWindowController(sourceID: CGWindowID(source.windowNumber), title: "Mouse Control Check",
+                                            sequence: 1, engine: engine, trimModel: trimModel,
+                                            sourceProcessID: ProcessInfo.processInfo.processIdentifier)
+        defer { viewer.close(); pattern.onMouseEvent = nil }
+        viewer.window?.level = .floating
+        viewer.showWindow(nil)
+        await waitUntil { viewer.wantsLiveFrames }
+        viewer.receive(frame)
+        viewer.options.controlSource = true
+        var received: [(NSEvent.EventType, CGPoint, Int, CGFloat)] = []
+        pattern.onMouseEvent = { event in
+            received.append((event.type, pattern.convert(event.locationInWindow, from: nil),
+                             event.type == .scrollWheel ? 0 : event.clickCount,
+                             event.type == .scrollWheel ? event.scrollingDeltaY : 0))
+        }
+        let size = viewer.surface.bounds.size
+        let placed = ImageGeometry.placement(source: frame.nativeSize, destination: size, mode: .fit)
+        let point = CGPoint(x: placed.minX + placed.width / 4, y: placed.minY + placed.height * 0.75)
+        let expected = CGPoint(x: frame.sourceRect.minX + frame.sourceRect.width / 4,
+                               y: frame.sourceRect.minY + frame.sourceRect.height / 4)
+        func event(_ type: NSEvent.EventType, at point: CGPoint, clicks: Int = 1) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: viewer.surface.convert(point, to: nil), modifierFlags: [],
+                               timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: viewer.window!.windowNumber,
+                               context: nil, eventNumber: 77, clickCount: clicks, pressure: type == .leftMouseUp ? 0 : 1)!
+        }
+        let drawable = viewer.surface.drawableSize
+        viewer.surface.mouseDown(with: event(.leftMouseDown, at: point))
+        viewer.surface.mouseUp(with: event(.leftMouseUp, at: point))
+        await waitUntil { received.count >= 2 }
+        check(received.count == 2 && abs((received.first?.1.x ?? -999) - expected.x) < 2 &&
+              abs((received.first?.1.y ?? -999) - expected.y) < 2,
+              "A click in a trimmed copy reaches the matching point in the original window")
+        viewer.surface.mouseDown(with: event(.leftMouseDown, at: point, clicks: 2))
+        viewer.surface.mouseUp(with: event(.leftMouseUp, at: point, clicks: 2))
+        await waitUntil { received.count >= 4 }
+        check(received.dropFirst(2).first?.2 == 2 && !viewer.isFillingDisplay,
+              "Control Source sends double-clicks to the source instead of filling the display")
+        viewer.surface.mouseDown(with: event(.leftMouseDown, at: point))
+        let outside = CGPoint(x: -100, y: size.height + 100)
+        viewer.surface.mouseDragged(with: event(.leftMouseDragged, at: outside))
+        viewer.surface.mouseUp(with: event(.leftMouseUp, at: outside))
+        await waitUntil { received.count >= 7 }
+        check(received.count >= 7 && received[5].0 == .leftMouseDragged && received[6].0 == .leftMouseUp &&
+              !viewer.mouseControl.isDragging, "Dragging beyond a copy still releases the source mouse button")
+        let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: -3, wheel2: 0, wheel3: 0)!
+        if let scrollEvent = NSEvent(cgEvent: scroll) {
+            viewer.mouseControl.send(scrollEvent, point: expected, sourceSize: frame.sourceSize)
+        }
+        await waitUntil { received.contains { $0.0 == .scrollWheel } }
+        check(received.contains { $0.0 == .scrollWheel && $0.3 < 0 }, "Scroll wheel reaches the original window")
+        let beforeCancel = received.count
+        viewer.surface.mouseDown(with: event(.leftMouseDown, at: point))
+        viewer.mouseControl.cancel()
+        await waitUntil { received.count >= beforeCancel + 2 }
+        check(received.count >= beforeCancel + 2 && received.last?.0 == .leftMouseUp &&
+              (received.last?.1.x ?? 0) < 0 && (received.last?.1.y ?? 0) < 0 && !viewer.mouseControl.isDragging,
+              "Disabling source control releases a held mouse button")
+        let rejected = !viewer.mouseControl.send(event(.leftMouseDown, at: point), point: expected,
+                                                  sourceSize: CGSize(width: 1, height: 1))
+        check(rejected, "A stale resized source rejects mouse input until its frame catches up")
+        check(viewer.surface.drawableSize == drawable && viewer.window?.canBecomeKey == false,
+              "Mouse controls preserve drawable resolution and never make the copy key")
+        let beforePause = received.count
+        viewer.showStatus("Source paused")
+        viewer.surface.mouseDown(with: event(.leftMouseDown, at: point))
+        viewer.surface.mouseUp(with: event(.leftMouseUp, at: point))
+        try? await Task.sleep(for: .milliseconds(150))
+        check(received.count == beforePause, "A paused source ignores clicks on its frozen picture")
+        samples["mouseExpectedSourcePoint"] = "\(expected)"
+        samples["mouseReceivedEvents"] = received.map { "\($0.0.rawValue):\($0.1)" }.joined(separator: ", ")
+    }
+
     private func verifyCaptureLifecycle() async {
         guard #available(macOS 14.4, *), let source else { return }
         do {
@@ -510,6 +587,12 @@ final class CaptureProbe {
 
 /// A Capture One–style Live View window: busy toolbar, flat background, noisy 4:3 picture.
 private final class ProbePattern: NSView {
+    var onMouseEvent: ((NSEvent) -> Void)?
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { onMouseEvent?(event) }
+    override func mouseUp(with event: NSEvent) { onMouseEvent?(event) }
+    override func mouseDragged(with event: NSEvent) { onMouseEvent?(event) }
+    override func scrollWheel(with event: NSEvent) { onMouseEvent?(event) }
     static let toolbar: CGFloat = 40
     var animate = false
     var tick = 0

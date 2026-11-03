@@ -31,6 +31,9 @@ struct CapturedFrame {
     let nativeSize: CGSize
     /// The camera picture within `image` in Core Image coordinates, once detected.
     let pictureArea: CGRect?
+    /// The captured crop and full source size in top-left logical window points.
+    let sourceRect: CGRect
+    let sourceSize: CGSize
 }
 
 private struct CapturePacket {
@@ -282,7 +285,14 @@ private final class CaptureOutput: NSObject, SCStreamOutput {
             lastGeometryReport = now; geometryChanged = true
         }
 
-        let frame = CapturedFrame(image: image, nativeSize: image.extent.size, pictureArea: picture)
+        let pointScale = scale * contentScale
+        guard pointScale.isFinite, pointScale > 0 else { return }
+        let sourceRect = CGRect(x: (region.minX - contentTopLeft.minX) / pointScale,
+                                y: (region.minY - contentTopLeft.minY) / pointScale,
+                                width: region.width / pointScale, height: region.height / pointScale)
+        let frame = CapturedFrame(image: image, nativeSize: image.extent.size, pictureArea: picture,
+                                  sourceRect: sourceRect,
+                                  sourceSize: CGSize(width: content.width / pointScale, height: content.height / pointScale))
         let metadata = !includeMetadata ? [:] : ["contentRect": "\(info[.contentRect] ?? "nil")",
                         "scaleFactor": "\(info[.scaleFactor] ?? "nil")",
                         "contentScale": "\(info[.contentScale] ?? "nil")",
