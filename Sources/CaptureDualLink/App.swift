@@ -63,6 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About Capture DualLink", action: #selector(showAbout), keyEquivalent: "").target = self
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Capture DualLink…", action: #selector(showPicker), keyEquivalent: ",").target = self
         appMenu.addItem(withTitle: "Setup Guide…", action: #selector(showSetupGuide), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Automatic Startup…", action: #selector(showAutomaticStartup), keyEquivalent: "").target = self
@@ -112,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             menu.addItem(.separator())
             menu.addItem(withTitle: "Screen Recording Settings…", action: #selector(permissionSettings), keyEquivalent: "").target = self
+            menu.addItem(withTitle: "About Capture DualLink", action: #selector(showAbout), keyEquivalent: "").target = self
             menu.addItem(withTitle: "Quit Capture DualLink", action: #selector(quitApp), keyEquivalent: "q").target = self
             if let button = statusItem.button {
                 menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
@@ -210,6 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         mirror.window?.deminiaturize(nil); mirror.window?.orderFrontRegardless()
     }
     @objc private func permissionSettings() { ensureModel().openPermissionSettings() }
+    @objc private func showAbout() { NSApp.activate(); NSApp.orderFrontStandardAboutPanel(nil) }
     @objc private func closeCopies() { model?.closeAll() }
     @objc private func quitApp() { model?.closeAll(); NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) { startup?.shutdown(); model?.shutdown() }

@@ -10,6 +10,8 @@ For a shared disk image, drag **Capture DualLink.app** to **Applications**, ejec
 
 The **linked shutter** icon appears in both the Dock and menu bar. Click either to reopen the window picker. Closing the picker leaves DualLink running; choose **Quit Capture DualLink** to exit. To keep its Dock icon after quitting, right-click it and choose **Options → Keep in Dock**.
 
+**About Capture DualLink** in the app menu or the menu bar icon's right-click menu shows the installed version when comparing builds with a friend.
+
 For a local build, open `dist/Capture DualLink.app`. For everyday use, quit the app and run `./scripts/install-app.sh` to copy it to your user Applications folder.
 
 1. Click **Allow Window Capture** and enable **Capture DualLink** under System Settings → Privacy & Security → Screen & System Audio Recording. Follow any macOS request to quit and reopen, then click **Refresh**.
@@ -68,6 +70,8 @@ Capture resolution and frame rate stay at your settings; DualLink never lowers r
 
 Source resizes and display-density changes are detected from each frame's metadata and applied immediately; a 5-second poll is the backstop. If ScreenCaptureKit stops a stream, DualLink reconnects to the same window and owner process with growing delays of 1, 2, 4, 8 and then 15 seconds, reset once a frame actually arrives. A closed source must be selected again; DualLink never silently switches to another window.
 
+Paused frames cannot be reused as live mouse targets when a copy is restored or added. New copies show the same paused status until a fresh frame arrives. A connection still opening when the Mac sleeps stays stopped until wake; an initial connection failure closes all copies waiting on it. Activity and settings refreshes wait for the initial connection instead of starting another. Pointer movement reuses the floating toolbar's hide timer and checks input permission once per forwarded event.
+
 ## Build and verify
 
 Requires macOS 14 or later and Swift 5.9 or later. Building needs only the Command Line Tools; `./scripts/test.sh` needs full Xcode, because the Command Line Tools don't include XCTest. No third-party packages, network service, recording files or video encoders are used.
@@ -92,6 +96,8 @@ This creates `dist/Capture-DualLink-<version>-universal.dmg` and a SHA-256 check
 Unit tests cover Retina pixel sizing, Mac-to-iPad aspect differences, Fit/Fill, trim conversion and bounds, picture detection (pillarbox, letterbox, near-background gray backdrops, flat picture areas, ±1 color-conversion dither, leftover toolbar lines, overlays in the bars, empty viewers) and detection smoothing.
 
 Automatic startup tests cover the 10-second confirmation, Wi-Fi dropouts, unknown or redacted network names, exact SSID matching, multiple interfaces, returning home and opening once per away visit. These are deterministic policy tests; they do not switch the Mac's real Wi-Fi network or log the user out.
+
+Native lifecycle checks also cover extra copies joining a failed connection, sleep during the initial source lookup, and paused-frame cache, status and input behavior when a copy is added or its visibility changes.
 
 The integration self-test captures only a calibration window owned by DualLink. The window is drawn like Capture One's Live View, with a busy toolbar, a flat gray background and a noisy 4:3 picture. The test verifies trim, picture detection and grid placement through real ScreenCaptureKit and the GPU pipeline:
 

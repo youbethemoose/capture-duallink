@@ -267,14 +267,18 @@ final class ViewerOverlay: NSVisualEffectView {
 
     func update(options: MirrorOptions, fillingDisplay: Bool) {
         buttons[.fit]?.title = options.mode == .fit ? "Fit" : "Fill"
+        buttons[.fit]?.setAccessibilityValue(options.mode == .fit ? "Fit" : "Fill")
         buttons[.grid]?.contentTintColor = options.showGrid ? .systemTeal : .white
+        buttons[.grid]?.setAccessibilityValue(options.showGrid ? "On" : "Off")
         buttons[.controlSource]?.contentTintColor = options.controlSource ? .systemTeal : .white
         buttons[.controlSource]?.title = options.controlSource ? "Control On" : "Control"
         buttons[.controlSource]?.setAccessibilityValue(options.controlSource ? "On" : "Off")
         buttons[.fillDisplay]?.image = NSImage(systemSymbolName: fillingDisplay ? "arrow.down.right.and.arrow.up.left"
                                                                                 : "arrow.up.left.and.arrow.down.right",
                                                accessibilityDescription: fillingDisplay ? "Exit Fill Display" : "Fill Display")
-        buttons[.fillDisplay]?.toolTip = fillingDisplay ? "Exit Fill Display (or double-click)" : "Fill Display (or double-click)"
+        let displayAction = fillingDisplay ? "Exit Fill Display" : "Fill Display"
+        buttons[.fillDisplay]?.setAccessibilityLabel(displayAction)
+        buttons[.fillDisplay]?.toolTip = displayAction + (options.controlSource ? "" : " (or double-click)")
     }
 
     @objc private func clicked(_ sender: NSButton) {
@@ -406,9 +410,9 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
 
     private func revealOverlay() {
         overlay.isHidden = false
-        hideOverlay?.invalidate()
+        if let hideOverlay { hideOverlay.fireDate = Date(timeIntervalSinceNow: 3); return }
         hideOverlay = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.overlay.isHidden = true }
+            MainActor.assumeIsolated { self?.overlay.isHidden = true; self?.hideOverlay = nil }
         }
     }
 
@@ -544,17 +548,15 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
 
     private func sendToSource(_ event: NSEvent) {
         guard hasImage, let frame = surface.capturedFrame, wantsLiveFrames else { mouseControl.cancel(); return }
-        if !SourceMouseControl.hasPermission,
-           mouseControl.processID != ProcessInfo.processInfo.processIdentifier {
-            if event.type == .leftMouseDown || event.type == .rightMouseDown { SourceMouseControl.explainPermission() }
-            return
-        }
         var point = surface.convert(event.locationInWindow, from: nil)
         if surface.isFlipped { point.y = surface.bounds.height - point.y }
         guard let mapped = ImageGeometry.sourcePoint(point, viewerSize: surface.bounds.size,
                                                       imageSize: frame.nativeSize, sourceRect: frame.sourceRect,
                                                       mode: options.mode, clamp: mouseControl.isDragging) else { return }
-        mouseControl.send(event, point: mapped, sourceSize: frame.sourceSize)
+        if !mouseControl.send(event, point: mapped, sourceSize: frame.sourceSize),
+           (event.type == .leftMouseDown || event.type == .rightMouseDown),
+           mouseControl.processID != ProcessInfo.processInfo.processIdentifier,
+           !SourceMouseControl.hasPermission { SourceMouseControl.explainPermission() }
     }
     @objc private func fillDisplay() { toggleFillDisplay() }
     @objc private func toggleFloating() {

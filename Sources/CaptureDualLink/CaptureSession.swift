@@ -58,6 +58,7 @@ final class CaptureSession: NSObject, SCStreamDelegate {
     /// ScreenCaptureKit stopped a running stream; called once per failure.
     var onFailure: (() -> Void)?
     private(set) var latestFrame: CapturedFrame?
+    private(set) var statusMessage: String?
     private(set) var failed = false
     private(set) var active = false
     private(set) var starting = false
@@ -98,13 +99,14 @@ final class CaptureSession: NSObject, SCStreamDelegate {
         let output = CaptureOutput(trim: trim, expectedScale: expectedContentScale, includeMetadata: onMetadata != nil, onFrame: { [weak self] packet in
             guard let self, !self.stopped, self.generation == token else { return }
             self.latestFrame = packet.frame
+            self.statusMessage = nil
             self.deliveredFrameCount += 1
             self.onMetadata?(packet.metadata)
             self.onFrame?(packet.frame)
             if packet.geometryChanged { self.onGeometryChange?() }
         }, onStatus: { [weak self] message in
             guard let self, !self.stopped, self.generation == token else { return }
-            self.onStatus?(message)
+            self.reportStatus(message)
         })
         self.output = output
         do {
@@ -171,8 +173,16 @@ final class CaptureSession: NSObject, SCStreamDelegate {
         generation = UUID()
         output?.invalidate(); output = nil
         latestFrame = nil
+        statusMessage = nil
         let old = stream; stream = nil
         try? await old?.stopCapture()
+    }
+
+    func reportStatus(_ message: String?) {
+        statusMessage = message
+        // A restored or newly created copy must not revive a paused frame as live input.
+        if message != nil { latestFrame = nil }
+        onStatus?(message)
     }
 
     nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -183,7 +193,7 @@ final class CaptureSession: NSObject, SCStreamDelegate {
             self.failed = true
             self.output?.invalidate()
             self.latestFrame = nil
-            self.onStatus?("Capture interrupted. Reconnecting to the selected window…")
+            self.reportStatus("Capture interrupted. Reconnecting to the selected window…")
             self.onFailure?()
         }
     }

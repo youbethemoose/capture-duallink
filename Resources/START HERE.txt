@@ -11,6 +11,7 @@ Drag Capture DualLink.app to Applications. Eject the disk image and open the app
 The Setup Guide opens the first time. The linked shutter is in the Dock and menu
 bar; click either to reopen the window picker. Closing the picker keeps the app
 running. To keep its Dock icon after quitting, right-click it > Options > Keep in Dock.
+About Capture DualLink in the app menu shows your installed version.
 Requires macOS 14 or later; supports Apple silicon and Intel Macs.
 
 SET UP

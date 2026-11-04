@@ -25,6 +25,7 @@ final class AppModel: ObservableObject {
     /// A copy is ready; the delegate hides the picker and returns focus to the source app.
     var onDuplicated: ((pid_t?) -> Void)?
     private(set) var sessions: [CGWindowID: CaptureSession] = [:]
+    private var openingSessions = Set<ObjectIdentifier>()
     private(set) var mirrors: [UUID: MirrorWindowController] = [:]
     private var trims: [CGWindowID: TrimModel] = [:]
     private var trimObservers: [CGWindowID: AnyCancellable] = [:]
@@ -158,12 +159,15 @@ final class AppModel: ObservableObject {
         let trimModel = TrimModel(appName: source.app, trim: savedTrim(for: source.settingsKey))
         trims[source.id] = trimModel
         let session = CaptureSession(source: source, detail: detail, fps: fps, trim: trimModel.trim)
+        let openingID = ObjectIdentifier(session)
+        openingSessions.insert(openingID)
+        defer { openingSessions.remove(openingID) }
         sessions[source.id] = session
         trimObservers[source.id] = trimModel.$trim.dropFirst().sink { [weak self, weak session] trim in
             session?.trim = trim
             self?.saveTrim(trim, for: source.settingsKey)
         }
-        let mirror = makeMirror(sourceID: source.id, title: source.label)
+        _ = makeMirror(sourceID: source.id, title: source.label)
         session.onFrame = { [weak self, weak session] frame in
             guard let self, let session, self.sessions[source.id] === session else { return }
             // Only a delivered frame proves recovery; a stream can start and die before one arrives.
@@ -191,17 +195,19 @@ final class AppModel: ObservableObject {
                 throw NSError(domain: "CaptureDualLink", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "The source window closed. Refresh and select its replacement."])
             }
-            guard sessions[source.id] === session, !shuttingDown else { await session.stop(); return }
+            guard sessions[source.id] === session, !sleeping, !shuttingDown else { await session.stop(); return }
             try await session.start(window: window)
-            guard sessions[source.id] === session, !shuttingDown else { await session.stop(); return }
+            guard sessions[source.id] === session, !sleeping, !shuttingDown else { await session.stop(); return }
             message = nil
             startPollingIfNeeded()
             onDuplicated?(session.sourceProcessID)
         } catch {
             guard sessions[source.id] === session else { await session.stop(); return }
+            let failedCopies = mirrors.values.filter { $0.sourceID == source.id }
             sessions.removeValue(forKey: source.id)
+            for mirror in failedCopies { mirror.close() }
             await session.stop()
-            mirror?.close()
+            guard sessions[source.id] == nil else { return }
             message = "Could not duplicate window: \(error.localizedDescription)"
             onShowPicker?()
         }
@@ -225,6 +231,7 @@ final class AppModel: ObservableObject {
                                             engine: engine, trimModel: trimModel,
                                             sourceProcessID: sessions[sourceID]?.sourceProcessID)
         mirror.onRequestFrame = { [weak self] in self?.sessions[sourceID]?.latestFrame }
+        if let status = sessions[sourceID]?.statusMessage { mirror.showStatus(status) }
         mirror.onActivityChange = { [weak self] in self?.scheduleActivityRefresh() }
         mirror.onClose = { [weak self] id in self?.removeMirror(id) }
         mirror.onTrimFinished = { [weak self] in
@@ -328,7 +335,8 @@ final class AppModel: ObservableObject {
         }
         let now = ProcessInfo.processInfo.systemUptime
         let candidates = Array(sessions).filter { id, session in
-            hasDemand(for: id) && (session.active || (recovery[id] ?? RecoveryBackoff()).isReady(at: now))
+            !openingSessions.contains(ObjectIdentifier(session)) && hasDemand(for: id) &&
+                (session.active || (recovery[id] ?? RecoveryBackoff()).isReady(at: now))
         }
         guard !candidates.isEmpty else { return }
         do {
@@ -343,13 +351,13 @@ final class AppModel: ObservableObject {
                     }) {
                         if session.active { try await session.refresh(window: window) }
                         else {
-                            session.onStatus?("Reconnecting to the selected window…")
+                            session.reportStatus("Reconnecting to the selected window…")
                             try await session.start(window: window)
                         }
                     } else {
                         await session.stop()
                         for mirror in mirrors.values where mirror.sourceID == id { mirror.releaseLiveFrame() }
-                        session.onStatus?("Source window closed. Select its replacement from the menu bar.")
+                        session.reportStatus("Source window closed. Select its replacement from the menu bar.")
                         recovery[id, default: RecoveryBackoff()].failed(at: now)
                     }
                 } catch {
@@ -357,7 +365,7 @@ final class AppModel: ObservableObject {
                     await session.stop()
                     for mirror in mirrors.values where mirror.sourceID == id { mirror.releaseLiveFrame() }
                     recovery[id, default: RecoveryBackoff()].failed(at: ProcessInfo.processInfo.systemUptime)
-                    session.onStatus?("Capture interrupted. Retrying the selected window…")
+                    session.reportStatus("Capture interrupted. Retrying the selected window…")
                 }
             }
         } catch {
@@ -365,7 +373,7 @@ final class AppModel: ObservableObject {
             for (id, session) in candidates where sessions[id] === session && !session.active &&
                 hasDemand(for: id) && !sleeping && !shuttingDown {
                 recovery[id, default: RecoveryBackoff()].failed(at: ProcessInfo.processInfo.systemUptime)
-                session.onStatus?("Could not reconnect. Check Screen Recording permission; DualLink will retry.")
+                session.reportStatus("Could not reconnect. Check Screen Recording permission; DualLink will retry.")
             }
         }
     }

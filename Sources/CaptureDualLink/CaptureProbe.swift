@@ -84,7 +84,9 @@ final class CaptureProbe {
         self.session = session
         session.onMetadata = { [weak self] in self?.metadata = $0 }
         session.onFrame = { [weak self] frame in self?.viewers.forEach { $0.receive(frame) } }
-        session.onStatus = { [weak self] status in if let status { self?.finish(error: status) } }
+        session.onStatus = { [weak self, weak session] status in
+            if let status, (session?.deliveredFrameCount ?? 0) > 0 { self?.finish(error: status) }
+        }
         session.onGeometryChange = { [weak self] in
             self?.geometryReports += 1
             Task { await self?.refreshSource() }
@@ -434,6 +436,58 @@ final class CaptureProbe {
             model.shutdown()
             await replacement?.stop()
 
+            var failedLookup: CheckedContinuation<SCShareableContent, Error>?
+            var openingReads = 0
+            let failedModel = AppModel(persistPreferences: false, activeContent: {
+                openingReads += 1
+                if openingReads == 1 { return try await withCheckedThrowingContinuation { failedLookup = $0 } }
+                return try await SCShareableContent.currentProcess
+            })
+            verificationModel = failedModel
+            let failedConnection = Task { await failedModel.duplicate(chosen) }
+            await waitUntil { failedLookup != nil }
+            guard let failedRead = failedLookup, let failedCopy = failedModel.mirrors.values.first else {
+                failedModel.shutdown(); failedConnection.cancel()
+                throw ProbeError("Could not hold the failed connection lookup.")
+            }
+            failedCopy.perform(.duplicate)
+            check(failedModel.mirrorCount == 2, "Another copy can join a connecting source")
+            failedModel.applyCaptureSettings()
+            try await Task.sleep(for: .milliseconds(150))
+            check(openingReads == 1 && failedModel.sessions[chosen.id]?.active == false,
+                  "Activity and settings refreshes do not start a second pending connection")
+            failedRead.resume(throwing: ProbeError("Simulated initial connection failure"))
+            await failedConnection.value
+            check(failedModel.mirrors.isEmpty && failedModel.sessions.isEmpty,
+                  "A failed initial connection cleans up every waiting copy")
+            failedModel.shutdown()
+
+            var sleepingLookup: CheckedContinuation<SCShareableContent, Error>?
+            var sleepReads = 0
+            let sleepingModel = AppModel(persistPreferences: false, activeContent: {
+                sleepReads += 1
+                if sleepReads == 1 { return try await withCheckedThrowingContinuation { sleepingLookup = $0 } }
+                return try await SCShareableContent.currentProcess
+            })
+            verificationModel = sleepingModel
+            let sleepingConnection = Task { await sleepingModel.duplicate(chosen) }
+            await waitUntil { sleepingLookup != nil }
+            guard let sleepingRead = sleepingLookup, let sleepingSession = sleepingModel.sessions[chosen.id] else {
+                sleepingModel.shutdown(); sleepingConnection.cancel()
+                throw ProbeError("Could not hold the sleeping connection lookup.")
+            }
+            sleepingModel.prepareForSleep()
+            sleepingRead.resume(returning: content)
+            await sleepingConnection.value
+            check(!sleepingSession.active && !sleepingSession.starting && sleepingModel.mirrorCount == 1,
+                  "A connection finishing its lookup during sleep stays stopped")
+            sleepingModel.resumeAfterSleep()
+            await waitUntil { sleepingSession.active && sleepingSession.latestFrame != nil }
+            check(sleepingSession.active && sleepingSession.latestFrame != nil,
+                  "Wake resumes a connection that was still opening at sleep")
+            sleepingModel.shutdown()
+            await sleepingSession.stop()
+
             var failReads = false, failedReads = 0
             let retryModel = AppModel(persistPreferences: false, activeContent: {
                 if failReads { failedReads += 1; throw ProbeError("Simulated window-list outage") }
@@ -445,6 +499,35 @@ final class CaptureProbe {
             guard let retrySession = retryModel.sessions[chosen.id] else {
                 throw ProbeError("Could not start the reconnect calibration.")
             }
+            await waitUntil { retrySession.latestFrame != nil && retryModel.mirrors.values.contains { $0.wantsLiveFrames } }
+            guard let pausedCopy = retryModel.mirrors.values.first, let pausedWindow = pausedCopy.window else {
+                throw ProbeError("Could not find the paused-source calibration copy.")
+            }
+            let pauseMessage = "Source paused for calibration"
+            retrySession.reportStatus(pauseMessage)
+            check(retrySession.latestFrame == nil, "A paused source discards its reusable live frame")
+            pausedCopy.options.controlSource = true
+            pausedCopy.windowDidChangeOcclusionState(Notification(name: NSWindow.didChangeOcclusionStateNotification))
+            let click = NSEvent.mouseEvent(with: .leftMouseDown,
+                                           location: CGPoint(x: pausedCopy.surface.bounds.midX, y: pausedCopy.surface.bounds.midY),
+                                           modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                           windowNumber: pausedWindow.windowNumber, context: nil,
+                                           eventNumber: 0, clickCount: 1, pressure: 1)!
+            pausedCopy.surface.mouseDown(with: click)
+            check(!pausedCopy.mouseControl.isDragging,
+                  "Visibility refresh cannot make a paused picture accept mouse input")
+            pausedCopy.mouseControl.cancel(); pausedCopy.options.controlSource = false
+            let copyIDs = Set(retryModel.mirrors.keys)
+            pausedCopy.perform(.duplicate)
+            let pausedExtra = retryModel.mirrors.values.first { !copyIDs.contains($0.id) }
+            check(pausedExtra?.surface.subviews.compactMap { $0 as? NSTextField }.contains {
+                $0.stringValue == pauseMessage && !$0.isHidden
+            } == true, "A new copy inherits the source's paused status")
+            let resumeCount = retrySession.deliveredFrameCount
+            pattern?.tick += 1; pattern?.needsDisplay = true
+            await waitUntil { retrySession.deliveredFrameCount > resumeCount && retrySession.latestFrame != nil }
+            check(retrySession.latestFrame != nil && retrySession.statusMessage == nil,
+                  "A fresh captured frame clears the paused status")
             await retrySession.stop()
             failReads = true
             retryModel.applyCaptureSettings()
