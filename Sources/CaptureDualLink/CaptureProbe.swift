@@ -1,6 +1,7 @@
 import AppKit
 import ScreenCaptureKit
 import CoreImage
+import QuartzCore
 import DualLinkCore
 import Darwin
 
@@ -239,6 +240,7 @@ final class CaptureProbe {
             MainActor.assumeIsolated { pattern?.tick += 1; pattern?.needsDisplay = true }
         }
         let model = AppModel(persistPreferences: false, activeContent: { try await SCShareableContent.currentProcess })
+        check(model.engine == nil, "An idle model allocates no Metal rendering context")
         model.detail = .native; model.fps = 30
         verificationModel = model
         do {
@@ -268,11 +270,15 @@ final class CaptureProbe {
             check(session.latestFrame?.image.extent.size == nativeSize,
                   "A trim set in one copy applies to the shared capture at native pixels")
             check(copies.count == 3 && model.sessions.count == 1, "Three viewers share one capture stream")
+            check(copies.allSatisfy { ($0.surface.layer as? CAMetalLayer)?.maximumDrawableCount == 2 },
+                  "Every viewer uses two full-resolution drawable buffers")
             await waitUntil { copies.allSatisfy { $0.surface.completedFrames > 0 } }
             let frames = session.deliveredFrameCount
             let renders = copies.map { $0.surface.completedFrames }
             let gpu = copies.reduce(0) { $0 + $1.surface.totalGPUTime }
             let dropped = copies.reduce(0) { $0 + $1.surface.droppedRenders }
+            let footprint = physicalFootprint()
+            let allocatedGPU = copies.first?.surface.engine.device.currentAllocatedSize ?? 0
             let cpu = cpuSeconds(), uptime = ProcessInfo.processInfo.systemUptime
             try? await Task.sleep(for: .seconds(5))
             let duration = ProcessInfo.processInfo.systemUptime - uptime
@@ -287,6 +293,8 @@ final class CaptureProbe {
                 "completedViewerRenders": completed.reduce(0, +),
                 "meanGPUTimeMillisecondsPerRender": completed.reduce(0, +) > 0 ? gpuTime / Double(completed.reduce(0, +)) * 1000 : 0,
                 "droppedRenderRequests": copies.reduce(0) { $0 + $1.surface.droppedRenders } - dropped,
+                "physicalFootprintBytes": max(footprint, physicalFootprint()),
+                "metalAllocatedBytes": max(allocatedGPU, copies.first?.surface.engine.device.currentAllocatedSize ?? 0),
                 "detectedPicture": session.latestFrame?.pictureArea.map { "\($0)" } ?? "nil"]
             check(delivered >= 60, "Live capture keeps delivering frames to three viewers")
             check(completed.allSatisfy { $0 >= 30 }, "Every live viewer keeps rendering")
@@ -405,6 +413,7 @@ final class CaptureProbe {
         await waitUntil { oldSession?.active == false && oldSession?.latestFrame == nil }
         check(model.liveViews.isEmpty && model.sessions.isEmpty && model.mirrorCount == 0,
               "Close All clears the live-view list and releases the last capture session")
+        check(model.engine == nil, "Closing the last view releases the model's rendering context and clears its caches")
         await model.duplicate(source)
         check(model.liveViews.map(\.name) == ["Live View 1"],
               "The first live view after closing all views starts at one")
@@ -652,6 +661,17 @@ final class CaptureProbe {
         getrusage(RUSAGE_SELF, &usage)
         return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) +
             Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
+    }
+
+    private func physicalFootprint() -> UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? info.phys_footprint : 0
     }
 
     // MARK: Focus and Fill Display

@@ -39,7 +39,7 @@ final class AppModel: ObservableObject {
     private(set) var mirrors: [UUID: MirrorWindowController] = [:]
     private var trims: [CGWindowID: TrimModel] = [:]
     private var trimObservers: [CGWindowID: AnyCancellable] = [:]
-    private var engine: RenderEngine?
+    private(set) var engine: RenderEngine?
     private var pollTask: Task<Void, Never>?
     private var activityTask: Task<Void, Never>?
     private var recovery: [CGWindowID: RecoveryBackoff] = [:]
@@ -57,7 +57,6 @@ final class AppModel: ObservableObject {
         detail = CaptureDetail(rawValue: UserDefaults.standard.string(forKey: "captureDetail") ?? "") ?? .native
         let savedFPS = UserDefaults.standard.integer(forKey: "captureFPS")
         fps = [15, 30, 60].contains(savedFPS) ? savedFPS : 30
-        engine = RenderEngine()
         observe(NSWorkspace.willSleepNotification, center: NSWorkspace.shared.notificationCenter) { $0.prepareForSleep() }
         observe(NSWorkspace.screensDidSleepNotification, center: NSWorkspace.shared.notificationCenter) { $0.prepareForSleep() }
         observe(NSWorkspace.didWakeNotification, center: NSWorkspace.shared.notificationCenter) { $0.resumeAfterSleep() }
@@ -157,6 +156,7 @@ final class AppModel: ObservableObject {
     }
 
     func duplicate(_ source: WindowSource) async {
+        if engine == nil { engine = RenderEngine() }
         guard engine != nil else { message = "A Metal-compatible GPU is required to display copies."; return }
         if let existing = sessions[source.id] {
             let mirror = makeMirror(sourceID: source.id, title: source.label)
@@ -280,6 +280,7 @@ final class AppModel: ObservableObject {
             trimObservers.removeValue(forKey: sourceID)
         }
         if sessions.isEmpty { pollTask?.cancel(); pollTask = nil }
+        if mirrors.isEmpty { engine?.context.clearCaches(); engine = nil }
         updateCount()
     }
 

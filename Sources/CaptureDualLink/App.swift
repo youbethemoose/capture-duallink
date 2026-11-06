@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var startup: HomeWiFiController?
     private var startupPanel: NSPanel?
     private var setupPanel: NSPanel?
+    private var menuReopenPending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let index = CommandLine.arguments.firstIndex(of: "--self-test"),
@@ -50,10 +51,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let loginLaunch = event?.eventID == kAEOpenApplication &&
             event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
         if !startup.enabled || !loginLaunch { showPicker() }
+        if let index = CommandLine.arguments.firstIndex(of: "--check-menu-bar"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            checkMenuBar(at: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showPicker(); return true
+        if !menuReopenPending { showPicker() }
+        return true
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -122,7 +128,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if let button = statusItem.button {
                 menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
             }
-        } else { showPicker() }
+        } else {
+            guard !menuReopenPending else { return }
+            menuReopenPending = true
+            let wasVisible = picker?.window?.isVisible == true
+            // Use the same activation/reopen path as a Dock click; cooperative activate() may be refused.
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.createsNewApplicationInstance = false
+            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { [weak self] _, error in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.menuReopenPending = false
+                    // Respect a close that happened while an already-visible window was being activated.
+                    if !wasVisible || self.picker?.window?.isVisible == true { self.showPicker() }
+                    if let error { self.model?.message = "Could not bring DualLink forward: \(error.localizedDescription)" }
+                }
+            }
+        }
     }
 
     @objc func showPicker() {
@@ -214,4 +237,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func closeCopies() { model?.closeAll() }
     @objc private func quitApp() { model?.closeAll(); NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) { startup?.shutdown(); model?.shutdown() }
+
+    /// Exercises the actual status item's target/action against real window lifecycle states.
+    private func checkMenuBar(at directory: URL) {
+        Task { [self] in
+            var results: [[String: Any]] = []
+            for state in ["already open", "closed", "hidden", "background", "repeated click"] {
+                switch state {
+                case "closed": picker?.close()
+                case "hidden": NSApp.hide(nil)
+                case "background":
+                    NSApp.hide(nil)
+                    try? await Task.sleep(for: .milliseconds(150))
+                    NSApp.unhideWithoutActivation()
+                default: break
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+                let beforeActive = NSApp.isActive
+                let beforeVisible = picker?.window?.isVisible == true
+                let beforeHidden = NSApp.isHidden
+                statusItem.button?.performClick(nil)
+                let deadline = ProcessInfo.processInfo.systemUptime + 3
+                while ProcessInfo.processInfo.systemUptime < deadline &&
+                    (menuReopenPending || !(NSApp.isActive && picker?.window?.isKeyWindow == true && picker?.window?.isVisible == true)) {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                results.append(["state": state, "active": NSApp.isActive,
+                                "beforeActive": beforeActive, "beforeVisible": beforeVisible,
+                                "beforeHidden": beforeHidden,
+                                "visible": picker?.window?.isVisible == true,
+                                "key": picker?.window?.isKeyWindow == true])
+            }
+            let passed = results.allSatisfy {
+                $0["active"] as? Bool == true && $0["visible"] as? Bool == true && $0["key"] as? Bool == true
+            } && results.contains { $0["state"] as? String == "background" &&
+                $0["beforeActive"] as? Bool == false && $0["beforeVisible"] as? Bool == true } &&
+                results.contains { $0["state"] as? String == "closed" && $0["beforeVisible"] as? Bool == false }
+                && results.contains { $0["state"] as? String == "hidden" && $0["beforeHidden"] as? Bool == true }
+            let report: [String: Any] = ["passed": passed, "checks": results,
+                "scope": "Actual NSStatusBarButton.performClick target/action; no desktop pointer injection",
+                "processID": ProcessInfo.processInfo.processIdentifier]
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: directory.appendingPathComponent("menu-bar-test.json"))
+            }
+            NSApp.terminate(nil)
+        }
+    }
 }

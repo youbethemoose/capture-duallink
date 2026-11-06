@@ -12,6 +12,8 @@ The **linked shutter** icon appears in both the Dock and menu bar. Click either 
 
 Clicking the menu bar icon always brings the main window forward, including over a copy in Fill Display. Its **Live Views** list shows every open copy, the source window, its display and its current state. **Show** brings a hidden or minimized copy back; **Close** turns off that copy, and **Close All** turns off every copy. These actions leave the original Capture One window open. Closing the last copy releases its capture session. The menu bar icon's right-click menu also shows displays and individual Close actions.
 
+The icon requests activation through macOS's existing-app reopen path, as a Dock click does. This handles cases where a plain cooperative activation request leaves the window visible but the app inactive.
+
 Live-view numbers identify open copies. A closed number can be reused, and creating a view after closing all copies starts at **Live View 1**. The main window scrolls so the list and source controls remain accessible on smaller displays.
 
 **About Capture DualLink** in the app menu or the menu bar icon's right-click menu shows the installed version when comparing builds with a friend.
@@ -70,7 +72,9 @@ Copies render with Metal at each window's actual backing-pixel size, so moving o
 
 ## Performance and recovery
 
-Capture resolution and frame rate stay at your settings; DualLink never lowers resolution to handle load. Capture-to-view delivery keeps only the newest pending frame, and each viewer allows at most two GPU renders in flight. When every copy of a source is minimized or hidden, capture stops; it resumes when a copy is visible again. Sleep releases streams and buffers, and wake restarts them with each copy's settings intact.
+Capture resolution and frame rate stay at your settings; DualLink never lowers resolution to handle load. Capture-to-view delivery keeps only the newest pending frame. Each viewer uses two full-resolution display buffers and allows one GPU render in flight, so stale work cannot accumulate behind another app's GPU requests. Core Image requests low-priority rendering. When every copy of a source is minimized or hidden, capture stops; it resumes when a copy is visible again. Sleep releases streams and buffers, and wake restarts them with each copy's settings intact.
+
+The graphics engine is allocated only when the first copy is created. Closing the last copy clears Core Image caches and releases the model's engine reference. The native performance report includes physical process footprint and Metal allocations for its calibration workload; these are not measurements of Photoshop or a real camera session.
 
 Source resizes and display-density changes are detected from each frame's metadata and applied immediately; a 5-second poll is the backstop. If ScreenCaptureKit stops a stream, DualLink reconnects to the same window and owner process with growing delays of 1, 2, 4, 8 and then 15 seconds, reset once a frame actually arrives. A closed source must be selected again; DualLink never silently switches to another window.
 
@@ -110,3 +114,5 @@ The integration self-test captures only a calibration window owned by DualLink. 
 ```
 
 Read `.build/verification/capture-test.json` after it exits; it needs macOS 14.4 or later. `--check-performance` runs the production model with three live viewers, then simulated sleep/wake, minimize/restore, closing a connection while its source lookup is pending, mismatched source rejection, window-list outages and final-copy cleanup. `--check-fill-display` checks that copies can't take focus (including a click sent through AppKit's event dispatch), exercises Fill Display and checks offscreen window restoration. These are synthetic local workloads, not a Capture One, camera or physical Sidecar benchmark. Check a real Capture One session with each iPad before relying on it in a shoot.
+
+`CaptureDualLink --check-menu-bar <report-directory>` is a separate developer check of the actual status-bar button's target/action. It tests open, closed, hidden, visible-but-background and repeated-open states, and requires the app to become active with its main window visible and key. It uses the normal app lifecycle, creates no capture streams, writes `menu-bar-test.json` and quits. It does not inject desktop mouse events.

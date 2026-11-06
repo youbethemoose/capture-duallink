@@ -45,7 +45,8 @@ final class RenderEngine {
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return nil }
         self.device = device; self.queue = queue
         queue.label = "Capture DualLink Rendering"
-        context = CIContext(mtlCommandQueue: queue, options: [.cacheIntermediates: false, .name: "Capture DualLink"])
+        context = CIContext(mtlCommandQueue: queue, options: [.cacheIntermediates: false, .priorityRequestLow: true,
+                                                            .name: "Capture DualLink"])
     }
 }
 
@@ -61,7 +62,7 @@ final class MirrorSurface: MTKView, MTKViewDelegate {
     var shouldRender: (() -> Bool)?
     var onSourceEvent: ((NSEvent) -> Void)?
     private(set) var capturedFrame: CapturedFrame?
-    private let inFlight = DispatchSemaphore(value: 2)
+    private let inFlight = DispatchSemaphore(value: 1)
     private var redrawPending = false
     private(set) var droppedRenders = 0
     private(set) var totalGPUTime: Double = 0
@@ -79,6 +80,8 @@ final class MirrorSurface: MTKView, MTKViewDelegate {
         isPaused = true
         enableSetNeedsDisplay = true
         delegate = self
+        // Two full-resolution display buffers; do not queue extra frames behind another app's GPU work.
+        (layer as? CAMetalLayer)?.maximumDrawableCount = 2
         // .activeAlways: DualLink is normally not the active app.
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                                        owner: self, userInfo: nil))
