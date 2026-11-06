@@ -1,5 +1,19 @@
 # Capture DualLink
 
+## [⬇ Download for Mac](https://github.com/youbethemoose/capture-duallink/releases/latest/download/Capture-DualLink.dmg)
+
+**macOS 14 or later · Apple silicon and Intel · ready-to-use app**
+
+1. **Download** the installer above and open the `.dmg` file.
+2. **Drag Capture DualLink into Applications.**
+3. **Open it from Applications.** The setup guide walks you through connecting the iPad and allowing window capture.
+
+No Terminal, Xcode or source-code download needed. To control Capture One from a copy, click **Control** and allow Accessibility when asked.
+
+**First launch:** this is a test build and is not Apple-notarized yet. If macOS blocks it, follow [Apple's first-launch instructions](https://support.apple.com/en-us/102445): after trying to open it, go to **System Settings → Privacy & Security → Open Anyway**. Only approve a copy you trust.
+
+---
+
 A small native macOS app for collaborative still-life photography. The photographer keeps Capture One's original Live View on the laptop, directs product placement and controls focus, grids and reference overlays. The prop stylist watches a DualLink copy of the same live frame on an iPad while positioning the product.
 
 Keep the original Capture One window on the laptop; move only the DualLink copy onto the iPad. For guides visible to both people, use Capture One's grid or overlay in the original Live View. DualLink's own Grid is local to a viewer. Enable **Control** in a copy's toolbar to click, drag and scroll in the original window. Focus is still handled by Capture One and depends on camera/lens support. The interface uses a centered layout, simple instructions and a flat sky-blue/pastel palette. Paired circle, square and triangle compositions explain the shared view without people or computer mockups.

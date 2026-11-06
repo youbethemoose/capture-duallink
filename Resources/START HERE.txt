@@ -7,7 +7,18 @@ add a grid or overlay, and direct where the product should move.
 Prop stylist: watch the same live frame on the iPad while placing the product.
 
 INSTALL
-Drag Capture DualLink.app to Applications. Eject the disk image and open the app.
+1. Drag Capture DualLink.app to the Applications shortcut beside it.
+2. Eject the disk image.
+3. Open Capture DualLink from Applications and follow the setup guide.
+
+No Terminal, Xcode or source-code download needed.
+
+FIRST LAUNCH
+This test build is not Apple-notarized yet. If macOS cannot verify the developer,
+try opening the installed app, then go to System Settings > Privacy & Security >
+Open Anyway. Only approve a copy you trust.
+Apple's first-launch instructions: https://support.apple.com/en-us/102445
+
 The Setup Guide opens the first time. The linked shutter is in the Dock and menu
 bar; click either to reopen the window picker. Closing the picker keeps the app
 running. To keep its Dock icon after quitting, right-click it > Options > Keep in Dock.
@@ -59,7 +70,7 @@ This is off on a fresh install. It needs Location permission for Wi-Fi names.
 Your home network name stays on your Mac. Quit stops the watcher until relaunch
 or login. Disconnected Wi-Fi does not count as away.
 
-PRIVATE TEST BUILD
+TEST BUILD
 This app has a local signature and is not Apple-notarized. macOS may block first
 launch. Only open a build you received from someone you trust.
 Apple's first-launch guidance: https://support.apple.com/en-us/102445

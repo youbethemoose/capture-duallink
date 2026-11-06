@@ -27,7 +27,7 @@ ln -s /Applications "$TASK_STAGE/Applications"
 cp "$TASK_ROOT/Resources/START HERE.txt" "$TASK_STAGE/START HERE.txt"
 # Only the app and its instructions are staged; preferences and home Wi-Fi stay local.
 [[ $(find "$TASK_STAGE" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ') == 3 ]]
-hdiutil create -ov -format UDZO -volname "Capture DualLink" -srcfolder "$TASK_STAGE" "$TASK_IMAGE"
+hdiutil create -ov -format UDZO -volname "Install Capture DualLink" -srcfolder "$TASK_STAGE" "$TASK_IMAGE"
 hdiutil verify "$TASK_IMAGE"
 TASK_MOUNT=$(mktemp -d "${TMPDIR:-/tmp}/duallink-verify.XXXXXX")
 hdiutil attach -readonly -nobrowse -mountpoint "$TASK_MOUNT" "$TASK_IMAGE" >/dev/null
