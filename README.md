@@ -10,6 +10,10 @@ For a shared disk image, drag **Capture DualLink.app** to **Applications**, ejec
 
 The **linked shutter** icon appears in both the Dock and menu bar. Click either to reopen the window picker. Closing the picker leaves DualLink running; choose **Quit Capture DualLink** to exit. To keep its Dock icon after quitting, right-click it and choose **Options → Keep in Dock**.
 
+Clicking the menu bar icon always brings the main window forward, including over a copy in Fill Display. Its **Live Views** list shows every open copy, the source window, its display and its current state. **Show** brings a hidden or minimized copy back; **Close** turns off that copy, and **Close All** turns off every copy. These actions leave the original Capture One window open. Closing the last copy releases its capture session. The menu bar icon's right-click menu also shows displays and individual Close actions.
+
+Live-view numbers identify open copies. A closed number can be reused, and creating a view after closing all copies starts at **Live View 1**. The main window scrolls so the list and source controls remain accessible on smaller displays.
+
 **About Capture DualLink** in the app menu or the menu bar icon's right-click menu shows the installed version when comparing builds with a friend.
 
 For a local build, open `dist/Capture DualLink.app`. For everyday use, quit the app and run `./scripts/install-app.sh` to copy it to your user Applications folder.

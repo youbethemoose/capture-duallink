@@ -312,10 +312,103 @@ final class CaptureProbe {
             await waitUntil { session.active && copies.allSatisfy { $0.surface.frameImage != nil } }
             check(session.active && session.latestFrame?.image.extent.size == nativeSize,
                   "Restoring viewers resumes native pixels without recreating their settings")
+            await verifyViewManagement(model: model, source: chosen)
             model.shutdown(); verificationModel = nil
             animationTimer?.invalidate(); animationTimer = nil
             for viewer in viewers { viewer.showWindow(nil) }
         } catch { check(false, "Pipeline verification: \(error.localizedDescription)") }
+    }
+
+    private func verifyViewManagement(model: AppModel, source: WindowSource) async {
+        let copies = model.mirrors.values.sorted { $0.sequence < $1.sequence }
+        guard copies.count == 3, let first = copies.first, let last = copies.last else {
+            check(false, "View management has three calibration copies"); return
+        }
+        check(model.liveViews.map(\.name) == ["Live View 1", "Live View 2", "Live View 3"],
+              "The manager lists exactly the open live views in numeric order")
+        check(copies.allSatisfy { copy in model.liveViews.contains {
+            $0.id == copy.id && $0.display == copy.window?.screen?.localizedName && $0.source == source.label
+        } }, "Each live view reports its actual screen and source")
+
+        // Exercise only our own windows; permission/source enumeration is unnecessary here.
+        let permission = model.hasPermission
+        model.hasPermission = false
+        let picker = PickerWindowController(model: model, onShowGuide: {})
+        defer { picker.close(); model.hasPermission = permission }
+        picker.present()
+        picker.present()
+        if NSApp.isActive { await waitUntil { picker.window?.isKeyWindow == true } }
+        samples["managerFocus"] = "active=\(NSApp.isActive), key=\(picker.window?.isKeyWindow == true), canBecomeKey=\(picker.window?.canBecomeKey == true)"
+        check(picker.window?.isVisible == true && picker.window?.canBecomeKey == true &&
+              (!NSApp.isActive || picker.window?.isKeyWindow == true),
+              "Opening management twice keeps it visible and able to receive keyboard input")
+        picker.window?.orderOut(nil)
+        picker.present()
+        check(picker.window?.isVisible == true, "Opening management restores a hidden panel")
+        picker.close()
+        picker.present()
+        check(picker.window?.isVisible == true, "Opening management restores a closed panel")
+        first.toggleFillDisplay()
+        picker.present()
+        check((picker.window?.level.rawValue ?? 0) > (first.window?.level.rawValue ?? 0),
+              "Management stays reachable above a live view filling its display")
+        first.toggleFillDisplay()
+        if let screen = NSScreen.main, let window = picker.window {
+            window.setFrameOrigin(CGPoint(x: screen.frame.maxX + 5000, y: screen.frame.minY))
+            picker.present()
+            check(NSScreen.screens.contains { $0.visibleFrame.intersects(window.frame) },
+                  "Opening management brings an offscreen panel back onto a connected screen")
+        }
+        picker.window?.orderOut(nil)
+
+        if NSScreen.screens.count > 1, let window = first.window,
+           let other = NSScreen.screens.first(where: { $0 != window.screen }) {
+            let original = window.frame
+            window.setFrameOrigin(CGPoint(x: other.visibleFrame.minX + 20, y: other.visibleFrame.minY + 40))
+            await waitUntil { model.liveViews.first { $0.id == first.id }?.display == other.localizedName }
+            check(model.liveViews.first { $0.id == first.id }?.display == other.localizedName,
+                  "Moving a view to another connected screen updates the manager")
+            window.setFrame(original, display: true)
+        }
+        last.window?.miniaturize(nil)
+        await waitUntil { model.liveViews.first { $0.id == last.id }?.state == "Minimized" }
+        check(model.liveViews.first { $0.id == last.id }?.state == "Minimized",
+              "Minimized live views remain listed with their state")
+        model.showMirror(last.id)
+        await waitUntil { last.window?.isMiniaturized == false && last.wantsLiveFrames }
+        check(last.window?.isVisible == true && last.window?.isMiniaturized == false,
+              "Show restores a minimized live view")
+        if let screen = NSScreen.main, let window = last.window {
+            let original = window.frame
+            window.setFrameOrigin(CGPoint(x: screen.frame.maxX + 5000, y: screen.frame.minY))
+            model.showMirror(last.id)
+            check(NSScreen.screens.contains { $0.visibleFrame.intersects(window.frame) },
+                  "Show brings a live view back from an unavailable display")
+            window.setFrame(original, display: true)
+        }
+
+        model.closeMirror(first.id)
+        check(model.mirrors[first.id] == nil && model.mirrorCount == 2 && model.liveViews.count == 2,
+              "Close removes exactly the chosen live view from both the window and manager")
+        last.perform(.duplicate)
+        let reused = model.mirrors.values.first { $0.sequence == 1 }
+        check(reused != nil && Set(model.liveViews.map(\.name)).count == 3,
+              "A freed live-view number is reused without duplicating an open number")
+        reused?.toggleFillDisplay()
+        if let reused { model.closeMirror(reused.id) }
+        check(model.mirrorCount == 2, "A view can be closed from management while filling its display")
+        last.window?.miniaturize(nil)
+        model.closeMirror(last.id)
+        check(model.mirrors[last.id] == nil, "A minimized live view can be closed from management")
+        let oldSession = model.sessions[source.id]
+        model.closeAll()
+        await waitUntil { oldSession?.active == false && oldSession?.latestFrame == nil }
+        check(model.liveViews.isEmpty && model.sessions.isEmpty && model.mirrorCount == 0,
+              "Close All clears the live-view list and releases the last capture session")
+        await model.duplicate(source)
+        check(model.liveViews.map(\.name) == ["Live View 1"],
+              "The first live view after closing all views starts at one")
+        model.closeAll()
     }
 
     private func verifyMouseControl() async {

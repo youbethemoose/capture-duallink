@@ -4,6 +4,14 @@ import SwiftUI
 import ScreenCaptureKit
 import DualLinkCore
 
+struct LiveViewSummary: Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    let source: String
+    let display: String
+    let state: String
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var sources: [WindowSource] = []
@@ -14,6 +22,7 @@ final class AppModel: ObservableObject {
     @Published var hasPermission = CGPreflightScreenCaptureAccess()
     @Published var message: String?
     @Published var mirrorCount = 0
+    @Published private(set) var liveViews: [LiveViewSummary] = []
     @Published var detail: CaptureDetail {
         didSet { if persistPreferences { UserDefaults.standard.set(detail.rawValue, forKey: "captureDetail") } }
     }
@@ -22,6 +31,7 @@ final class AppModel: ObservableObject {
     }
     var onCountChange: (() -> Void)?
     var onShowPicker: (() -> Void)?
+    var onShowMirror: (() -> Void)?
     /// A copy is ready; the delegate hides the picker and returns focus to the source app.
     var onDuplicated: ((pid_t?) -> Void)?
     private(set) var sessions: [CGWindowID: CaptureSession] = [:]
@@ -36,7 +46,6 @@ final class AppModel: ObservableObject {
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var sleeping = false
     private var shuttingDown = false
-    private var sequence = 0
     private let activeContent: @MainActor () async throws -> SCShareableContent
     private let persistPreferences: Bool
 
@@ -226,13 +235,19 @@ final class AppModel: ObservableObject {
 
     private func makeMirror(sourceID: CGWindowID, title: String) -> MirrorWindowController? {
         guard let engine, let trimModel = trims[sourceID] else { return nil }
-        sequence += 1
+        var sequence = 1
+        let used = Set(mirrors.values.map(\.sequence))
+        while used.contains(sequence) { sequence += 1 }
         let mirror = MirrorWindowController(sourceID: sourceID, title: title, sequence: sequence,
                                             engine: engine, trimModel: trimModel,
                                             sourceProcessID: sessions[sourceID]?.sourceProcessID)
         mirror.onRequestFrame = { [weak self] in self?.sessions[sourceID]?.latestFrame }
         if let status = sessions[sourceID]?.statusMessage { mirror.showStatus(status) }
-        mirror.onActivityChange = { [weak self] in self?.scheduleActivityRefresh() }
+        mirror.onStateChange = { [weak self] in self?.updateLiveViews() }
+        mirror.onActivityChange = { [weak self] in
+            self?.updateLiveViews()
+            self?.scheduleActivityRefresh()
+        }
         mirror.onClose = { [weak self] id in self?.removeMirror(id) }
         mirror.onTrimFinished = { [weak self] in
             AppModel.returnFocus(to: self?.sessions[sourceID]?.sourceProcessID)
@@ -268,7 +283,25 @@ final class AppModel: ObservableObject {
         updateCount()
     }
 
-    private func updateCount() { mirrorCount = mirrors.count; onCountChange?() }
+    private func updateCount() { mirrorCount = mirrors.count; updateLiveViews(); onCountChange?() }
+
+    private func updateLiveViews() {
+        let views = mirrors.values.sorted { $0.sequence < $1.sequence }.map {
+            LiveViewSummary(id: $0.id, name: $0.name, source: $0.sourceLabel,
+                            display: $0.window?.screen?.localizedName ?? "Display unavailable", state: $0.stateDescription)
+        }
+        if liveViews != views { liveViews = views }
+    }
+
+    func showMirror(_ id: UUID) {
+        guard let mirror = mirrors[id] else { return }
+        onShowMirror?()
+        AppModel.returnFocus(to: sessions[mirror.sourceID]?.sourceProcessID)
+        mirror.reveal()
+        updateLiveViews()
+    }
+
+    func closeMirror(_ id: UUID) { mirrors[id]?.close() }
 
     func closeAll() {
         for mirror in Array(mirrors.values) { mirror.close() }

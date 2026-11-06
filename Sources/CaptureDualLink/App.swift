@@ -19,7 +19,7 @@ enum CaptureDualLinkApp {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
-    private var picker: NSPanel?
+    private var picker: PickerWindowController?
     private var model: AppModel?
     private var probe: CaptureProbe?
     private var startup: HomeWiFiController?
@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startup.onChange = { [weak self] in self?.updateStatus() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = MenuBarIcon.image
+        statusItem.button?.setAccessibilityLabel("Capture DualLink — Manage Live Views")
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusClicked(_:))
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -91,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let count = model?.mirrorCount ?? 0
         statusItem?.button?.title = count > 0 ? " \(count)" : ""
         let automation = startup?.enabled == true ? "\n\(startup?.status ?? "")" : ""
-        statusItem?.button?.toolTip = "Capture DualLink · \(count) active copies\nClick to choose a window. Right-click for actions.\(automation)"
+        statusItem?.button?.toolTip = "Capture DualLink · \(count) open live views\nClick to manage live views. Right-click for actions.\(automation)"
     }
 
     @objc private func statusClicked(_ sender: Any?) {
@@ -106,9 +107,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(autoStart)
             if let model, !model.mirrors.isEmpty {
                 menu.addItem(.separator())
-                for mirror in model.mirrors.values.sorted(by: { ($0.window?.title ?? "") < ($1.window?.title ?? "") }) {
-                    let item = NSMenuItem(title: mirror.window?.title ?? "Copy", action: #selector(revealCopy(_:)), keyEquivalent: "")
-                    item.target = self; item.representedObject = mirror.id; menu.addItem(item)
+                for view in model.liveViews {
+                    let item = NSMenuItem(title: "\(view.name) · \(view.display)", action: #selector(revealCopy(_:)), keyEquivalent: "")
+                    item.target = self; item.representedObject = view.id; menu.addItem(item)
+                    let close = NSMenuItem(title: "Close \(view.name)", action: #selector(closeCopy(_:)), keyEquivalent: "")
+                    close.target = self; close.representedObject = view.id; menu.addItem(close)
                 }
                 menu.addItem(withTitle: "Close All Copies", action: #selector(closeCopies), keyEquivalent: "").target = self
             }
@@ -119,8 +122,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if let button = statusItem.button {
                 menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
             }
-        } else if picker?.isVisible == true {
-            picker?.orderOut(nil)
         } else { showPicker() }
     }
 
@@ -129,27 +130,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard UserDefaults.standard.bool(forKey: "hasCompletedSetupGuide") else { showSetupGuide(); return }
         let model = ensureModel()
         if picker == nil {
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 470, height: 500),
-                                styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
-            panel.title = "Capture DualLink"
-            panel.appearance = NSAppearance(named: .aqua)
-            panel.titleVisibility = .hidden
-            panel.titlebarAppearsTransparent = true
-            panel.isReleasedWhenClosed = false
-            panel.hidesOnDeactivate = false
-            panel.collectionBehavior = [.fullScreenAuxiliary]
-            panel.isMovableByWindowBackground = true
-            panel.contentView = NSHostingView(rootView: PickerView(model: model, onShowGuide: { [weak self] in self?.showSetupGuide() }))
-            panel.center()
-            picker = panel
+            picker = PickerWindowController(model: model, onShowGuide: { [weak self] in self?.showSetupGuide() })
         }
-        picker?.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        picker?.present()
         Task { await model.refreshSources() }
     }
 
     @objc private func showSetupGuide() {
         guard probe == nil else { return }
+        picker?.window?.orderOut(nil)
         let model = ensureModel()
         if setupPanel == nil {
             let height = min(740, (NSScreen.main?.visibleFrame.height ?? 820) - 64)
@@ -163,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             panel.isMovableByWindowBackground = true
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
+            panel.level = .statusBar + 1
             panel.minSize = NSSize(width: 780, height: 590)
             panel.contentView = NSHostingView(rootView: SetupGuideView(model: model, onContinue: { [weak self] in
                 UserDefaults.standard.set(true, forKey: "hasCompletedSetupGuide")
@@ -185,14 +175,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.onCountChange = { [weak self] in self?.updateStatus() }
         model.onShowPicker = { [weak self] in self?.showPicker() }
         model.onDuplicated = { [weak self] pid in
-            self?.picker?.orderOut(nil)
+            self?.picker?.window?.orderOut(nil)
             AppModel.returnFocus(to: pid)
         }
+        model.onShowMirror = { [weak self] in self?.picker?.window?.orderOut(nil) }
         return model
     }
 
     @objc private func showAutomaticStartup() {
         guard let startup else { return }
+        picker?.window?.orderOut(nil)
         if startupPanel == nil {
             let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 450, height: 460),
                                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -200,6 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             panel.appearance = NSAppearance(named: .aqua)
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
+            panel.level = .statusBar + 1
             panel.contentView = NSHostingView(rootView: AutoStartView(startup: startup))
             panel.center()
             startupPanel = panel
@@ -209,11 +202,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func revealCopy(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? UUID, let mirror = model?.mirrors[id] else { return }
-        mirror.window?.deminiaturize(nil); mirror.window?.orderFrontRegardless()
+        guard let id = sender.representedObject as? UUID else { return }
+        model?.showMirror(id)
+    }
+    @objc private func closeCopy(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        model?.closeMirror(id)
     }
     @objc private func permissionSettings() { ensureModel().openPermissionSettings() }
-    @objc private func showAbout() { NSApp.activate(); NSApp.orderFrontStandardAboutPanel(nil) }
+    @objc private func showAbout() { picker?.window?.orderOut(nil); NSApp.activate(); NSApp.orderFrontStandardAboutPanel(nil) }
     @objc private func closeCopies() { model?.closeAll() }
     @objc private func quitApp() { model?.closeAll(); NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) { startup?.shutdown(); model?.shutdown() }

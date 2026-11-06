@@ -23,6 +23,10 @@ SET UP
    Start with Native / Retina and 30 fps.
 
 ON SET
+- Click DualLink's menu bar icon to bring its main window forward. Live Views
+  shows each open copy and its display. Use Show, Close or Close All there;
+  Close also works for hidden, minimized and full-display copies.
+  Closing copies leaves Capture One open. New views reuse available numbers.
 - Adjust focus in Capture One, if your connected camera and lens support it.
 - Add a grid or reference overlay in Capture One to show it on both views.
   DualLink's own Grid affects only its copy.

@@ -1,6 +1,46 @@
 import SwiftUI
 import AppKit
 
+final class PickerWindowController: NSWindowController {
+    init(model: AppModel, onShowGuide: @escaping () -> Void) {
+        let height = min(740, (NSScreen.main?.visibleFrame.height ?? 800) - 40)
+        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: height),
+                            styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        super.init(window: panel)
+        panel.title = "Capture DualLink"
+        panel.appearance = NSAppearance(named: .aqua)
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = true
+        // Management must remain reachable over a copy in Fill Display.
+        panel.level = .statusBar + 1
+        panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        panel.isMovableByWindowBackground = true
+        panel.minSize = NSSize(width: 470, height: 420)
+        panel.maxSize = NSSize(width: 470, height: CGFloat.greatestFiniteMagnitude)
+        panel.contentView = NSHostingView(rootView: PickerView(model: model, onShowGuide: onShowGuide))
+        panel.center()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func present() {
+        guard let window else { return }
+        if NSApp.isHidden { NSApp.unhide(nil) }
+        if !NSApp.isActive { NSApp.activate() }
+        window.deminiaturize(nil)
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main {
+            var frame = window.frame
+            frame.size.height = min(frame.height, screen.visibleFrame.height)
+            frame.origin.x = min(max(frame.minX, screen.visibleFrame.minX), screen.visibleFrame.maxX - frame.width)
+            frame.origin.y = min(max(frame.minY, screen.visibleFrame.minY), screen.visibleFrame.maxY - frame.height)
+            window.setFrame(frame, display: true)
+        }
+        window.makeKeyAndOrderFront(nil)
+    }
+}
+
 struct PickerView: View {
     @ObservedObject var model: AppModel
     var onShowGuide: () -> Void
@@ -21,12 +61,16 @@ struct PickerView: View {
                         .font(.system(size: 12)).foregroundStyle(DualLinkStyle.mutedInk)
                 }
                 if model.mirrorCount > 0 {
-                    Text("\(model.mirrorCount) active")
+                    Text("\(model.mirrorCount) open live \(model.mirrorCount == 1 ? "view" : "views")")
                         .font(.system(size: 11, weight: .medium)).foregroundStyle(DualLinkStyle.ink)
                 }
             }
             .frame(maxWidth: .infinity).padding(22)
 
+            Divider()
+            ScrollView {
+            VStack(spacing: 0) {
+            liveViewList
             Divider()
             if model.hasPermission {
                 sourcePicker
@@ -65,6 +109,10 @@ struct PickerView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 20).padding(.bottom, 14)
             }
+            }
+            }
+            .frame(maxHeight: .infinity)
+            Divider()
 
             VStack(spacing: 10) {
                 Button(model.creating ? "Connecting…" : "Duplicate Window") {
@@ -84,6 +132,42 @@ struct PickerView: View {
         .foregroundStyle(DualLinkStyle.ink).tint(DualLinkStyle.ink)
         .preferredColorScheme(.light)
         .task { if model.hasPermission { await model.refreshSources() } }
+    }
+
+    private var liveViewList: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("LIVE VIEWS").font(.system(size: 10, weight: .semibold)).tracking(1.2)
+                Spacer()
+                if !model.liveViews.isEmpty {
+                    Button("Close All") { model.closeAll() }
+                        .buttonStyle(.plain).font(.system(size: 11))
+                        .accessibilityLabel("Close all live views")
+                }
+            }
+            .foregroundStyle(DualLinkStyle.mutedInk)
+            if model.liveViews.isEmpty {
+                Text("No live views open. Choose a source below to create one.")
+                    .font(.system(size: 12)).foregroundStyle(DualLinkStyle.mutedInk)
+                    .frame(maxWidth: .infinity).multilineTextAlignment(.center)
+            }
+            ForEach(model.liveViews) { view in
+                VStack(spacing: 6) {
+                    Text(view.name).font(.system(size: 13, weight: .semibold))
+                    Text(view.source).font(.system(size: 11)).lineLimit(2)
+                    Label(view.display, systemImage: "display").font(.system(size: 12, weight: .medium))
+                    Text(view.state).font(.system(size: 11)).foregroundStyle(DualLinkStyle.mutedInk)
+                    HStack(spacing: 16) {
+                        Button("Show") { model.showMirror(view.id) }
+                            .accessibilityLabel("Show \(view.name) on \(view.display)")
+                        Button("Close") { model.closeMirror(view.id) }
+                            .accessibilityLabel("Close \(view.name)")
+                    }.buttonStyle(.bordered).controlSize(.small)
+                }
+                .multilineTextAlignment(.center).padding(12).frame(maxWidth: .infinity)
+                .background(DualLinkStyle.paper.opacity(0.65), in: RoundedRectangle(cornerRadius: 10))
+            }
+        }.padding(20)
     }
 
     private var sourcePicker: some View {

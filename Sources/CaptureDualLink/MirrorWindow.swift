@@ -300,6 +300,7 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     var onDuplicate: (() -> Void)?
     var onRequestFrame: (() -> CapturedFrame?)?
     var onActivityChange: (() -> Void)?
+    var onStateChange: (() -> Void)?
     /// Called when the trim panel closes, so focus can go back to the source app.
     var onTrimFinished: (() -> Void)?
     private let status = NSTextField(wrappingLabelWithString: "Connecting to window…")
@@ -312,7 +313,15 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     private var optionsUpdatePending = false
     private(set) var acceptedFrames = 0
     private var closed = false
-    private let sequence: Int
+    let sequence: Int
+    let sourceLabel: String
+    var name: String { "Live View \(sequence)" }
+    var stateDescription: String {
+        if window?.isMiniaturized == true { return "Minimized" }
+        if window?.isVisible != true { return "Hidden" }
+        if !status.isHidden { return status.stringValue }
+        return hasImage ? "Live" : "Waiting for live image"
+    }
     private var windowed: (frame: NSRect, style: NSWindow.StyleMask, level: NSWindow.Level)?
     var isFillingDisplay: Bool { windowed != nil }
     var wantsLiveFrames: Bool {
@@ -322,14 +331,14 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
 
     init(sourceID: CGWindowID, title: String, sequence: Int, engine: RenderEngine, trimModel: TrimModel,
          sourceProcessID: pid_t? = nil) {
-        self.sourceID = sourceID; self.sequence = sequence; self.trimModel = trimModel
+        self.sourceID = sourceID; self.sequence = sequence; self.sourceLabel = title; self.trimModel = trimModel
         mouseControl = SourceMouseControl(windowID: sourceID, processID: sourceProcessID)
         surface = MirrorSurface(engine: engine, options: options)
         let window = ViewerPanel(contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
                                  styleMask: [.titled, .closable, .miniaturizable, .resizable, .nonactivatingPanel],
                                  backing: .buffered, defer: false)
         super.init(window: window)
-        window.title = "\(title) · Copy \(sequence)"
+        window.title = "\(name) — \(title)"
         window.minSize = NSSize(width: 320, height: 180)
         window.backgroundColor = .black
         window.isReleasedWhenClosed = false
@@ -380,7 +389,7 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         }
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                                 object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.fitToScreenIfFilling() }
+            MainActor.assumeIsolated { self?.fitToScreenIfFilling(); self?.visibilityChanged() }
         }
         window.center()
         window.setFrameOrigin(NSPoint(x: window.frame.minX + CGFloat((sequence - 1) % 6) * 24,
@@ -397,15 +406,18 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     func receive(_ frame: CapturedFrame) {
         guard wantsLiveFrames else { return }
         acceptedFrames += 1
+        let wasLive = hasImage
         hasImage = true
         surface.update(frame)
         status.isHidden = true
+        if !wasLive { onStateChange?() }
     }
 
     func showStatus(_ message: String?) {
         if message != nil { hasImage = false; mouseControl.cancel() }
         status.stringValue = message ?? ""
         status.isHidden = message == nil
+        onStateChange?()
     }
 
     private func revealOverlay() {
@@ -435,6 +447,18 @@ final class MirrorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         mouseControl.cancel()
         hasImage = false
         surface.discardLiveFrame()
+        onStateChange?()
+    }
+
+    func reveal() {
+        guard !closed, let window else { return }
+        window.deminiaturize(nil)
+        if isFillingDisplay { fitToScreenIfFilling() }
+        else if let screen = window.screen ?? NSScreen.main {
+            window.setFrame(window.constrainFrameRect(window.frame, to: screen), display: true)
+        }
+        window.orderFrontRegardless()
+        visibilityChanged()
     }
 
     func windowWillClose(_ notification: Notification) {
